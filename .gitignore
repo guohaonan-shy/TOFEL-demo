@@ -1,0 +1,12 @@
+# Python
+.venv/
+__pycache__/
+
+# Node.js
+node_modules/
+
+# Environment
+.env
+
+# Data (local storage)
+data/
