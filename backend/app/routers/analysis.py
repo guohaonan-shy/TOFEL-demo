@@ -56,6 +56,7 @@ async def create_analysis(
     db.add(analysis)
     await db.flush()
     await db.refresh(analysis)
+    await db.commit()  # Commit before background task
     
     # Queue background task
     background_tasks.add_task(
@@ -91,7 +92,8 @@ async def get_analysis(
     return AnalysisResponse(
         task_id=analysis.id,
         status=analysis.status,
-        report_markdown=analysis.report_markdown,
+        report_markdown=None,  # Deprecated, always None
+        report_json=analysis.report_json,
         error_message=analysis.error_message,
         created_at=analysis.created_at
     )
@@ -117,7 +119,8 @@ async def get_analysis_by_recording(
     return AnalysisResponse(
         task_id=analysis.id,
         status=analysis.status,
-        report_markdown=analysis.report_markdown,
+        report_markdown=None,  # Deprecated, always None
+        report_json=analysis.report_json,
         error_message=analysis.error_message,
         created_at=analysis.created_at
     )

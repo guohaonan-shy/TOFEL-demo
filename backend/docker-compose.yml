@@ -9,7 +9,7 @@ services:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin123
     volumes:
-      - ./data/minio:/data
+      - minio_data:/data
     command: server /data --console-address ":9001"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
@@ -33,3 +33,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+volumes:
+  minio_data:
+    driver: local

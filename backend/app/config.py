@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     MINIO_BUCKET_QUESTIONS: str = "toefl-questions"
     MINIO_BUCKET_RECORDINGS: str = "toefl-recordings"
     
+    # OpenAI
+    OPENAI_API_KEY: str = ""
+    
     # Volcengine (Doubao)
     VOLCENGINE_API_KEY: str = ""
     VOLCENGINE_ACCESS_KEY: str = ""

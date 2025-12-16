@@ -7,19 +7,11 @@ import {
   ChevronDown, ChevronUp, Star, Zap, Volume2, Sparkles, ArrowRight
 } from 'lucide-react';
 
-// --- Mock Data ---
+// API and Hooks
+import { fetchQuestions, uploadRecording, startAnalysis, getAnalysisResult, type Question, type AnalysisResponse } from '../services/api';
+import { useAudioRecorder } from '../hooks/useAudioRecorder';
 
-const QUESTION_DATA = {
-  category: "Independent Task",
-  title: "Gap Year",
-  text: "Students should take a gap year before entering university to gain work experience.",
-  question: "Do you agree or disagree with the following statement? Use specific reasons and examples to support your answer."
-};
-
-const SOS_CONTENT = {
-  keywords: ["Financial Independence", "Career Clarity"],
-  starter: "Personally, I believe taking a gap year is beneficial because..."
-};
+// --- Fallback Mock Data (for development) ---
 
 const MOCK_REPORT = {
   score: 23,
@@ -110,11 +102,45 @@ const App = () => {
   // P5 Audio Sync State
   const [currentPlayingSentence, setCurrentPlayingSentence] = useState<number | null>(null);
 
+  // NEW: Backend Integration State
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [currentQuestion, setCurrentQuestion] = useState<Question | null>(null);
+  const [isLoadingQuestions, setIsLoadingQuestions] = useState(false);
+  const [recordingId, setRecordingId] = useState<number | null>(null);
+  const [taskId, setTaskId] = useState<number | null>(null);
+  const [analysisReport, setAnalysisReport] = useState<AnalysisResponse | null>(null);
+  const [apiError, setApiError] = useState<string | null>(null);
+  
+  // NEW: Audio Recorder Hook
+  const audioRecorder = useAudioRecorder();
+
   // ---------------- Logic Controllers ----------------
+
+  // P1: Fetch Questions on Mount
+  useEffect(() => {
+    const loadQuestions = async () => {
+      setIsLoadingQuestions(true);
+      setApiError(null);
+      try {
+        const data = await fetchQuestions();
+        setQuestions(data.questions);
+        if (data.questions.length > 0) {
+          setCurrentQuestion(data.questions[0]);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to load questions';
+        setApiError(message);
+        console.error('Error fetching questions:', error);
+      } finally {
+        setIsLoadingQuestions(false);
+      }
+    };
+    loadQuestions();
+  }, []);
 
   // Countdown Logic
   useEffect(() => {
-    let interval: NodeJS.Timeout | null = null;
+    let interval: ReturnType<typeof setInterval> | null = null;
     if (isTimerRunning && !isPaused && timeLeft > 0) {
       interval = setInterval(() => {
         setTimeLeft((prev) => prev - 1);
@@ -140,22 +166,25 @@ const App = () => {
     }
   }, [currentStep]);
 
-  // Recording Waveform Animation
+  // Recording Waveform Animation - Updated to use real audio levels
   useEffect(() => {
-    let animationFrame: NodeJS.Timeout | null = null;
-    if (currentStep === 'recording' && isTimerRunning && !isPaused) {
+    if (currentStep === 'recording' && isTimerRunning && !isPaused && audioRecorder.isRecording) {
       const updateBars = () => {
-        setAudioBars(prev => prev.map(() => Math.max(8, Math.random() * 48)));
+        // Use real audio level from recorder, with some randomization for visual effect
+        const baseLevel = audioRecorder.audioLevel / 2; // Normalize from 0-100 to 0-50
+        setAudioBars(prev => prev.map(() => Math.max(8, baseLevel + Math.random() * 20)));
       };
       const barInterval = setInterval(updateBars, 100);
       return () => clearInterval(barInterval);
+    } else if (currentStep !== 'recording' || isPaused) {
+      // Reset bars when not recording or paused
+      setAudioBars(new Array(30).fill(10));
     }
-    return () => {};
-  }, [currentStep, isTimerRunning, isPaused]);
+  }, [currentStep, isTimerRunning, isPaused, audioRecorder.isRecording, audioRecorder.audioLevel]);
 
   // Audio Player Progress (P4 & P5)
   useEffect(() => {
-    let interval: NodeJS.Timeout | null = null;
+    let interval: ReturnType<typeof setInterval> | null = null;
     if (isPlaying && audioProgress < audioTotalTime) {
       interval = setInterval(() => {
         setAudioProgress((prev) => {
@@ -186,39 +215,59 @@ const App = () => {
     };
   }, [isPlaying, audioProgress, audioTotalTime, currentStep]);
 
-  // P4.5 Analysis Auto-Progress
+  // P4.5 Analysis Polling - Real backend polling
   useEffect(() => {
-    if (currentStep === 'analyzing') {
-      let stepIdx = 0;
+    if (currentStep === 'analyzing' && taskId) {
+      // Reset analysis steps
       setAnalysisSteps([
-        { id: 1, label: 'Transcription', status: 'pending' },
-        { id: 2, label: 'Rating', status: 'pending' },
-        { id: 3, label: 'Grammar Analysis', status: 'pending' },
-        { id: 4, label: 'Generating Feedback', status: 'pending' }
+        { id: 1, label: 'Transcription', status: 'completed' }, // Already completed (upload done)
+        { id: 2, label: 'Rating', status: 'completed' }, // Already completed (task created)
+        { id: 3, label: 'AI Analysis', status: 'processing' },
+        { id: 4, label: 'Generating Report', status: 'pending' }
       ]);
-      
-      const processStep = () => {
-        setAnalysisSteps(prev => prev.map((s, i) => 
-          i === stepIdx ? {...s, status: 'processing'} : s
-        ));
-        
-        setTimeout(() => {
-          setAnalysisSteps(prev => prev.map((s, i) => 
-            i === stepIdx ? {...s, status: 'completed'} : s
-          ));
+
+      let pollCount = 0;
+      const maxPolls = 60; // Maximum 2 minutes (60 * 2 seconds)
+
+      const pollInterval = setInterval(async () => {
+        pollCount++;
+
+        if (pollCount > maxPolls) {
+          clearInterval(pollInterval);
+          setApiError('Analysis timeout - please try again');
+          setCurrentStep('confirmation');
+          return;
+        }
+
+        try {
+          const result = await getAnalysisResult(taskId);
           
-          stepIdx++;
-          if (stepIdx < 4) {
-            setTimeout(processStep, 500);
-          } else {
+          if (result.status === 'completed') {
+            // Analysis complete!
+            setAnalysisSteps(prev => prev.map(s => ({...s, status: 'completed'})));
+            setAnalysisReport(result);
+            clearInterval(pollInterval);
             setTimeout(() => setCurrentStep('report'), 800);
+          } else if (result.status === 'failed') {
+            clearInterval(pollInterval);
+            setApiError(result.error_message || 'Analysis failed');
+            setCurrentStep('confirmation');
+          } else {
+            // Still processing - update UI
+            setAnalysisSteps(prev => prev.map(s => 
+              s.id === 3 ? {...s, status: 'processing'} : 
+              s.id === 4 ? {...s, status: 'pending'} : s
+            ));
           }
-        }, 1200);
-      };
-      
-      setTimeout(processStep, 300);
+        } catch (error) {
+          console.error('Error polling analysis:', error);
+          // Continue polling on error
+        }
+      }, 2000); // Poll every 2 seconds
+
+      return () => clearInterval(pollInterval);
     }
-  }, [currentStep]);
+  }, [currentStep, taskId]);
 
   const handleTimerComplete = () => {
     if (currentStep === 'prep_countdown') {
@@ -245,14 +294,27 @@ const App = () => {
     setIsTimerRunning(true);
   };
 
-  const startRecordingPhase = () => {
+  const startRecordingPhase = async () => {
     // P2 -> P3
     setCurrentStep('recording');
     setTimeLeft(45);
     setIsTimerRunning(true);
+    
+    // Start real audio recording
+    try {
+      await audioRecorder.startRecording();
+    } catch (error) {
+      console.error('Failed to start recording:', error);
+      setApiError('Failed to access microphone. Please check permissions.');
+    }
   };
 
   const togglePause = () => {
+    if (isPaused) {
+      audioRecorder.resumeRecording();
+    } else {
+      audioRecorder.pauseRecording();
+    }
     setIsPaused(!isPaused);
   };
 
@@ -260,30 +322,51 @@ const App = () => {
     // Retry: Back to Prep
     setIsTimerRunning(false);
     setIsPaused(false);
+    audioRecorder.stopRecording();
+    audioRecorder.clearRecording();
     startPracticeFlow(); 
   };
 
   const finishRecording = () => {
     setIsTimerRunning(false);
+    audioRecorder.stopRecording();
     setCurrentStep('confirmation');
   };
 
-  const submitForAnalysis = () => {
+  const submitForAnalysis = async () => {
+    if (!audioRecorder.audioBlob) {
+      setApiError('No recording available');
+      return;
+    }
+
+    if (!currentQuestion) {
+      setApiError('No question selected');
+      return;
+    }
+
     setCurrentStep('analyzing');
-    // Simulate Analysis Process
-    const simulateAnalysis = () => {
-      let stepIdx = 0;
-      const interval = setInterval(() => {
-        if (stepIdx < analysisSteps.length) {
-          setAnalysisSteps(prev => prev.map((s, i) => i === stepIdx ? {...s, status: 'completed'} : s));
-          stepIdx++;
-        } else {
-          clearInterval(interval);
-          setCurrentStep('report');
-        }
-      }, 1000);
-    };
-    simulateAnalysis();
+    setApiError(null);
+
+    try {
+      // Step 1: Upload recording
+      setAnalysisSteps(prev => prev.map(s => s.id === 1 ? {...s, status: 'processing'} : s));
+      const uploadResult = await uploadRecording(audioRecorder.audioBlob, currentQuestion.question_id);
+      setRecordingId(uploadResult.id);
+      setAnalysisSteps(prev => prev.map(s => s.id === 1 ? {...s, status: 'completed'} : s));
+
+      // Step 2: Start analysis
+      setAnalysisSteps(prev => prev.map(s => s.id === 2 ? {...s, status: 'processing'} : s));
+      const analysisResult = await startAnalysis(uploadResult.id);
+      setTaskId(analysisResult.task_id);
+      setAnalysisSteps(prev => prev.map(s => s.id === 2 ? {...s, status: 'completed'} : s));
+
+      // Note: Polling will be handled in a separate useEffect (P4.5)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to submit recording';
+      setApiError(message);
+      console.error('Error submitting for analysis:', error);
+      setCurrentStep('confirmation'); // Go back to confirmation page
+    }
   };
 
   const backToHome = () => {
@@ -324,81 +407,112 @@ const App = () => {
   // ---------------- Component Views ----------------
 
   // P1: Question Detail & SOS
-  const renderDetail = () => (
-    <div className="flex flex-col items-center justify-center h-full max-w-3xl mx-auto w-full animate-in fade-in zoom-in-95 duration-300">
-      
-      {/* Question Card */}
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 md:p-12 w-full text-center mb-8 relative overflow-hidden">
-        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-400 to-indigo-500" />
-        <p className="text-sm text-gray-500 font-medium font-serif italic mb-6">
-          {QUESTION_DATA.question}
-        </p>
-        <h2 className="text-2xl md:text-4xl font-bold text-gray-900 leading-tight">
-          "{QUESTION_DATA.text}"
-        </h2>
-      </div>
-      
-      {/* SOS Capsule (Interaction Core) */}
-      <div className="relative w-full flex flex-col items-center z-10">
-        <button 
-          onClick={() => setIsSOSOpen(!isSOSOpen)}
-          className={`
-            flex items-center gap-2 px-6 py-3 rounded-full shadow-lg transition-all duration-300
-            ${isSOSOpen 
-              ? 'bg-amber-100 text-amber-800 ring-2 ring-amber-200 translate-y-0' 
-              : 'bg-white text-gray-600 hover:bg-amber-50 -translate-y-2'}
-          `}
-        >
-          <Zap size={18} className={isSOSOpen ? "fill-amber-700" : "text-amber-500"} />
-          <span className="font-bold">{isSOSOpen ? "Hide Hints" : "No Idea? / 没思路？"}</span>
-          {isSOSOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-        </button>
+  const renderDetail = () => {
+    if (isLoadingQuestions) {
+      return (
+        <div className="flex items-center justify-center h-full">
+          <div className="text-center">
+            <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+            <p className="text-gray-600">Loading questions...</p>
+          </div>
+        </div>
+      );
+    }
 
-        {/* SOS Expanded Content */}
-        {isSOSOpen && (
-          <div className="mt-4 bg-white p-6 rounded-2xl shadow-xl border border-amber-100 w-full max-w-2xl animate-in slide-in-from-top-4 duration-300">
-            <div className="flex items-start gap-4 mb-4 pb-4 border-b border-gray-50">
-              <div className="bg-amber-100 p-2 rounded-lg text-amber-600">
-                 <Sparkles size={20} />
-              </div>
-              <div>
-                <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Keywords & Ideas</h4>
-                <div className="flex flex-wrap gap-2">
-                  {SOS_CONTENT.keywords.map((kw, i) => (
-                    <span key={i} className="px-3 py-1.5 bg-amber-50 text-amber-800 text-sm font-semibold rounded-lg border border-amber-100">
-                      {kw}
-                    </span>
-                  ))}
+    if (apiError || !currentQuestion) {
+      return (
+        <div className="flex items-center justify-center h-full">
+          <div className="text-center max-w-md">
+            <AlertCircle size={48} className="text-red-500 mx-auto mb-4" />
+            <h3 className="text-xl font-bold text-gray-900 mb-2">Failed to Load Questions</h3>
+            <p className="text-gray-600 mb-4">{apiError || 'No questions available'}</p>
+            <button 
+              onClick={() => window.location.reload()}
+              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex flex-col items-center justify-center h-full max-w-3xl mx-auto w-full animate-in fade-in zoom-in-95 duration-300">
+        
+        {/* Question Card */}
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 md:p-12 w-full text-center mb-8 relative overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-400 to-indigo-500" />
+          <p className="text-sm text-gray-500 font-medium font-serif italic mb-6">
+            Do you agree or disagree with the following statement? Use specific reasons and examples to support your answer.
+          </p>
+          <h2 className="text-2xl md:text-4xl font-bold text-gray-900 leading-tight">
+            "{currentQuestion.instruction}"
+          </h2>
+        </div>
+        
+        {/* SOS Capsule (Interaction Core) */}
+        <div className="relative w-full flex flex-col items-center z-10">
+          <button 
+            onClick={() => setIsSOSOpen(!isSOSOpen)}
+            className={`
+              flex items-center gap-2 px-6 py-3 rounded-full shadow-lg transition-all duration-300
+              ${isSOSOpen 
+                ? 'bg-amber-100 text-amber-800 ring-2 ring-amber-200 translate-y-0' 
+                : 'bg-white text-gray-600 hover:bg-amber-50 -translate-y-2'}
+            `}
+          >
+            <Zap size={18} className={isSOSOpen ? "fill-amber-700" : "text-amber-500"} />
+            <span className="font-bold">{isSOSOpen ? "Hide Hints" : "No Idea? / 没思路？"}</span>
+            {isSOSOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+          </button>
+
+          {/* SOS Expanded Content */}
+          {isSOSOpen && (
+            <div className="mt-4 bg-white p-6 rounded-2xl shadow-xl border border-amber-100 w-full max-w-2xl animate-in slide-in-from-top-4 duration-300">
+              <div className="flex items-start gap-4 mb-4 pb-4 border-b border-gray-50">
+                <div className="bg-amber-100 p-2 rounded-lg text-amber-600">
+                   <Sparkles size={20} />
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Keywords & Ideas</h4>
+                  <div className="flex flex-wrap gap-2">
+                    {currentQuestion.sos_keywords.map((kw, i) => (
+                      <span key={i} className="px-3 py-1.5 bg-amber-50 text-amber-800 text-sm font-semibold rounded-lg border border-amber-100">
+                        {kw}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               </div>
+              
+              <div className="flex items-start gap-4">
+                 <div className="bg-blue-100 p-2 rounded-lg text-blue-600">
+                   <Volume2 size={20} />
+                 </div>
+                 <div>
+                  <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Starter Sentence</h4>
+                  <p className="text-gray-700 font-medium text-lg leading-relaxed">
+                    "{currentQuestion.sos_starter}"
+                  </p>
+                 </div>
+              </div>
             </div>
-            
-            <div className="flex items-start gap-4">
-               <div className="bg-blue-100 p-2 rounded-lg text-blue-600">
-                 <Volume2 size={20} />
-               </div>
-               <div>
-                <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Starter Sentence</h4>
-                <p className="text-gray-700 font-medium text-lg leading-relaxed">
-                  "{SOS_CONTENT.starter}"
-                </p>
-               </div>
-            </div>
-          </div>
-        )}
+          )}
+        </div>
+
+        <div className="flex-1" /> {/* Spacer */}
+
+        <button 
+          onClick={startPracticeFlow}
+          className="mb-8 bg-blue-600 hover:bg-blue-700 text-white text-lg font-bold px-16 py-4 rounded-full shadow-xl shadow-blue-200 transition-transform hover:scale-105 active:scale-95 flex items-center gap-2"
+        >
+          <span>Start Practice</span>
+          <ArrowRight size={20} />
+        </button>
       </div>
-
-      <div className="flex-1" /> {/* Spacer */}
-
-      <button 
-        onClick={startPracticeFlow}
-        className="mb-8 bg-blue-600 hover:bg-blue-700 text-white text-lg font-bold px-16 py-4 rounded-full shadow-xl shadow-blue-200 transition-transform hover:scale-105 active:scale-95 flex items-center gap-2"
-      >
-        <span>Start Practice</span>
-        <ArrowRight size={20} />
-      </button>
-    </div>
-  );
+    );
+  };
 
   // P2: Preparation Phase (TTS + Countdown)
   const renderPrep = () => (
@@ -407,7 +521,7 @@ const App = () => {
       {/* Question Fixed Top */}
       <div className="w-full bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-8 text-center opacity-90">
           <h2 className="text-xl font-bold text-gray-800">
-          "{QUESTION_DATA.text}"
+          "{currentQuestion?.instruction || ''}"
         </h2>
       </div>
       
@@ -458,7 +572,7 @@ const App = () => {
        {/* Question Fixed Top */}
        <div className="w-full bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-8 text-center opacity-90">
          <h2 className="text-xl font-bold text-gray-800">
-          "{QUESTION_DATA.text}"
+          "{currentQuestion?.instruction || ''}"
         </h2>
       </div>
       
@@ -641,267 +755,212 @@ const App = () => {
   );
 
   // P5: AI Report Page
-  const renderReport = () => (
-    <div className="w-full max-w-5xl mx-auto h-full overflow-y-auto pb-24 animate-in slide-in-from-bottom-8 duration-500 scroll-smooth">
-      
-      {/* Header */}
-      <div className="flex items-end justify-between mb-8 pb-4 border-b border-gray-200">
-        <div>
-          <h2 className="text-3xl font-bold text-gray-900">Analysis Report</h2>
-          <div className="flex items-center gap-2 mt-1">
-            <span className="text-sm font-medium text-gray-500">Task 1: Gap Year</span>
-            <span className="text-gray-300">•</span>
-            <span className="text-sm text-gray-400">{new Date().toLocaleDateString()}</span>
+  // Helper Component: Sentence Card
+  const SentenceCard = ({ sentence, index }: { sentence: any; index: number }) => {
+    const isGood = sentence.evaluation.includes('优秀');
+    const isExpanded = expandedSentenceId === index;
+    
+    return (
+      <div className={`group transition-all ${isExpanded ? 'bg-blue-50/30' : 'hover:bg-gray-50'}`}>
+        <div className="p-5 cursor-pointer" onClick={() => setExpandedSentenceId(isExpanded ? null : index)}>
+          <div className="flex items-start gap-4">
+            {/* Icon */}
+            <div className="mt-1.5 shrink-0">
+              {isGood ? 
+                <CheckCircle2 size={18} className="text-green-500" /> : 
+                <Zap size={18} className="text-blue-500" />
+              }
+            </div>
+            
+            {/* Original Text */}
+            <div className="flex-1">
+              <p className="text-lg leading-relaxed text-gray-800 font-medium">
+                {sentence.original_text}
+              </p>
+              
+              {/* Expandable Feedback */}
+              {isExpanded && (
+                <div className="mt-4 animate-in fade-in duration-300">
+                  {sentence.native_version && (
+                    <div className="bg-white rounded-xl border border-blue-100 p-5 shadow-sm mb-3">
+                      <div className="flex items-start gap-4 mb-3">
+                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white shrink-0">
+                          <Star size={14} fill="currentColor" />
+                        </div>
+                        <div className="flex-1">
+                          <div className="text-xs font-bold text-blue-600 uppercase mb-1">
+                            Native Speaker Version
+                          </div>
+                          <p className="text-gray-900 text-lg font-serif leading-relaxed">
+                            {sentence.native_version}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Feedback Details */}
+                  <div className="space-y-3 pl-12">
+                    <div>
+                      <div className="text-xs font-bold text-blue-600 mb-1">语法：</div>
+                      <div className="text-sm text-gray-700">{sentence.grammar_feedback}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-green-600 mb-1">表达：</div>
+                      <div className="text-sm text-gray-700">{sentence.expression_feedback}</div>
+                    </div>
+                    <div className="bg-indigo-50 p-3 rounded-lg">
+                      <div className="text-xs font-bold text-indigo-600 mb-1 flex items-center gap-1">
+                        <Star size={12} className="fill-indigo-200" />
+                        建议：
+                      </div>
+                      <div className="text-sm text-indigo-700">{sentence.suggestion_feedback}</div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+            
+            {/* Chevron */}
+            <ChevronDown 
+              size={20} 
+              className={`transition-transform ${isExpanded ? 'rotate-180' : ''} text-gray-300`}
+            />
           </div>
-        </div>
-        <div className="text-right">
-           {/* Placeholder for export/share */}
         </div>
       </div>
+    );
+  };
 
-      {/* Section A: Score & Summary */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-        
-        {/* Score Card */}
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 lg:col-span-1 flex flex-col items-center justify-center relative overflow-hidden group hover:shadow-md transition-shadow">
-          <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-blue-400 to-indigo-500" />
-          <div className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-6">ETS Estimated Score</div>
-          <div className="relative mb-6">
-             <svg className="w-36 h-36 transform -rotate-90">
-               <circle cx="72" cy="72" r="64" stroke="#f1f5f9" strokeWidth="8" fill="transparent" />
-               <circle cx="72" cy="72" r="64" stroke="#3b82f6" strokeWidth="8" fill="transparent" strokeDasharray={`${(23/30)*402} 402`} strokeLinecap="round" />
-             </svg>
-             <div className="absolute inset-0 flex flex-col items-center justify-center">
-               <span className="text-5xl font-bold text-gray-900 tracking-tighter">{MOCK_REPORT.score}</span>
-               <span className="text-xs text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded mt-1 uppercase">{MOCK_REPORT.level}</span>
-             </div>
+  const renderReport = () => {
+    if (!analysisReport?.report_json) {
+      return (
+        <div className="flex items-center justify-center h-full">
+          <div className="text-center">
+            <AlertCircle size={48} className="text-amber-500 mx-auto mb-4" />
+            <h3 className="text-xl font-bold text-gray-900 mb-2">No Report Available</h3>
+            <p className="text-gray-600 mb-4">The analysis report could not be loaded.</p>
+            <button 
+              onClick={backToHome}
+              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            >
+              Back to Home
+            </button>
           </div>
-          {/* Simple Radar/Tags */}
-          <div className="w-full flex justify-between gap-2 text-center text-xs">
-            {Object.entries(MOCK_REPORT.radar).map(([key, val]) => (
-               <div key={key} className="flex-1 bg-gray-50 py-2 rounded-lg border border-gray-100">
-                 <div className="text-gray-400 capitalize mb-0.5 text-[10px]">{key}</div>
-                 <div className={`font-bold ${val === 'Good' ? 'text-green-600' : 'text-amber-600'}`}>{val}</div>
-               </div>
+        </div>
+      );
+    }
+    
+    const report = analysisReport.report_json;
+    
+    return (
+      <div className="w-full max-w-5xl mx-auto h-full overflow-y-auto pb-24">
+        {/* Score Card + Summary Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+          
+          {/* Score Card */}
+          <div className="bg-white p-6 rounded-2xl shadow-sm border lg:col-span-1">
+            <div className="text-gray-400 text-xs font-bold uppercase mb-6">ETS Estimated Score</div>
+            <div className="relative mb-6 flex justify-center">
+              <svg className="w-36 h-36 transform -rotate-90">
+                <circle cx="72" cy="72" r="64" stroke="#f1f5f9" strokeWidth="8" fill="transparent" />
+                <circle 
+                  cx="72" cy="72" r="64" 
+                  stroke="#3b82f6" 
+                  strokeWidth="8" 
+                  fill="transparent"
+                  strokeDasharray={`${(report.total_score/30)*402} 402`}
+                  strokeLinecap="round"
+                />
+              </svg>
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                <span className="text-5xl font-bold text-gray-900">{report.total_score}</span>
+                <span className="text-xs text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded mt-1 uppercase">
+                  {report.level}
+                </span>
+              </div>
+            </div>
+            
+            {/* Component Scores */}
+            <div className="flex justify-between gap-2 text-center text-xs">
+              <div className="flex-1 bg-gray-50 py-2 rounded-lg border">
+                <div className="text-gray-400 text-[10px]">Delivery</div>
+                <div className="font-bold text-blue-600">{report.delivery_score}/10</div>
+              </div>
+              <div className="flex-1 bg-gray-50 py-2 rounded-lg border">
+                <div className="text-gray-400 text-[10px]">Language</div>
+                <div className="font-bold text-green-600">{report.language_score}/10</div>
+              </div>
+              <div className="flex-1 bg-gray-50 py-2 rounded-lg border">
+                <div className="text-gray-400 text-[10px]">Topic</div>
+                <div className="font-bold text-purple-600">{report.topic_score}/10</div>
+              </div>
+            </div>
+          </div>
+          
+          {/* AI Summary - Gradient Card */}
+          <div className="bg-gradient-to-br from-indigo-600 to-blue-700 p-8 rounded-2xl shadow-lg text-white lg:col-span-2">
+            <div className="flex items-start gap-5">
+              <div className="p-3 bg-white/10 rounded-xl backdrop-blur-md border border-white/10">
+                <Sparkles className="text-yellow-300" fill="currentColor" size={24} />
+              </div>
+              <div>
+                <h3 className="text-xs font-bold text-blue-200 uppercase tracking-widest mb-3">AI Summary</h3>
+                <p className="text-white font-medium leading-relaxed text-xl">
+                  {report.overall_summary}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        {/* Interactive Sentence Analysis */}
+        <div className="bg-white rounded-2xl shadow-sm border mb-8">
+          <div className="p-6 border-b bg-gray-50/50">
+            <h3 className="font-bold text-gray-800 text-lg">📝 逐句分析</h3>
+            <p className="text-sm text-gray-500 mt-1">点击句子展开详细反馈</p>
+          </div>
+          
+          <div className="divide-y">
+            {report.sentence_analyses.map((sentence: any, idx: number) => (
+              <SentenceCard 
+                key={idx} 
+                sentence={sentence} 
+                index={idx}
+              />
             ))}
           </div>
         </div>
-
-        {/* One-Liner Summary */}
-        <div className="bg-gradient-to-br from-indigo-600 to-blue-700 p-8 rounded-2xl shadow-lg text-white lg:col-span-2 flex flex-col justify-center relative overflow-hidden">
-          <div className="absolute top-0 right-0 p-32 bg-white opacity-5 rounded-full transform translate-x-12 -translate-y-12 blur-3xl" />
-          <div className="flex items-start gap-5 relative z-10">
-            <div className="p-3 bg-white/10 rounded-xl backdrop-blur-md border border-white/10">
-              <Sparkles className="text-yellow-300" fill="currentColor" size={24} />
-            </div>
-            <div>
-              <h3 className="text-xs font-bold text-blue-200 uppercase tracking-widest mb-3">AI Summary</h3>
-              <p className="text-white font-medium leading-relaxed text-xl md:text-2xl">
-                "{MOCK_REPORT.summary}"
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Section B: Transcript & Polish (The "Ask AI" Interaction) */}
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden mb-24">
-        <div className="p-6 border-b border-gray-100 bg-gray-50/50">
-          <h3 className="font-bold text-gray-800 text-lg">Transcript & AI Feedback</h3>
-          <p className="text-sm text-gray-500 mt-1">Review your response with native-level polish suggestions. Click a sentence to listen.</p>
+        
+        {/* Actionable Tips */}
+        <div className="bg-blue-50 rounded-2xl p-6 border border-blue-100 mb-8">
+          <h3 className="text-lg font-bold text-blue-900 mb-4 flex items-center gap-2">
+            <Star className="text-blue-600" size={20} />
+            🎯 行动建议
+          </h3>
+          <ul className="space-y-3">
+            {report.actionable_tips.map((tip: string, i: number) => (
+              <li key={i} className="flex gap-3">
+                <span className="text-blue-600 font-bold">{i + 1}.</span>
+                <span className="text-gray-700">{tip}</span>
+              </li>
+            ))}
+          </ul>
         </div>
         
-        {/* Audio Player - Placed inside Transcript section */}
-        <div className="p-6 border-b border-gray-100 bg-blue-50/30">
-          <div className="flex items-center gap-4">
-            <button 
-              onClick={toggleAudioPlay}
-              className="w-14 h-14 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-full shadow-lg flex items-center justify-center text-white hover:scale-105 transition-all shrink-0"
-            >
-              {isPlaying ? <Pause size={24} /> : <Play size={24} fill="currentColor" className="ml-1" />}
-            </button>
-            <div className="flex-1">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">Your Recording</span>
-                <div className="text-xs font-mono text-gray-400">
-                  <span className="text-blue-600 font-semibold">{formatTime(audioProgress)}</span>
-                  <span className="mx-1">/</span>
-                  <span>{formatTime(audioTotalTime)}</span>
-                </div>
-              </div>
-              <div className="h-2 bg-gray-200 rounded-full overflow-hidden cursor-pointer" 
-                onClick={(e) => {
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const x = e.clientX - rect.left;
-                  const percentage = x / rect.width;
-                  setAudioProgress(percentage * audioTotalTime);
-                }}
-              >
-                <div 
-                  className="h-full bg-gradient-to-r from-blue-500 to-indigo-600 rounded-full transition-all duration-100" 
-                  style={{ width: `${(audioProgress / audioTotalTime) * 100}%` }}
-                ></div>
-              </div>
-            </div>
-          </div>
-        </div>
-        
-        <div className="divide-y divide-gray-100">
-          {MOCK_REPORT.transcript.map((item) => {
-            const isExpanded = expandedSentenceId === item.id;
-            const isCurrentlyPlaying = currentPlayingSentence === item.id;
-            
-            return (
-            <div 
-              key={item.id} 
-              className={`group transition-all duration-300 ${
-                isCurrentlyPlaying 
-                  ? 'bg-blue-100 ring-2 ring-blue-400 ring-inset' 
-                  : isExpanded 
-                    ? 'bg-blue-50/30' 
-                    : 'hover:bg-gray-50'
-              }`}
-            >
-              <div 
-                className="p-5 cursor-pointer"
-                onClick={() => {
-                  setExpandedSentenceId(isExpanded ? null : item.id);
-                  if (!isExpanded) {
-                    jumpToAudioTime(item.startTime);
-                  }
-                }}
-              >
-                <div className="flex items-start gap-4">
-                  {/* Status Indicator */}
-                  <div className="mt-1.5 shrink-0">
-                      {item.type === 'issue' && <AlertCircle size={18} className="text-amber-500" />}
-                      {item.type === 'suggestion' && <Zap size={18} className="text-blue-500" />}
-                      {item.type === 'good' && <CheckCircle2 size={18} className="text-green-500" />}
-                  </div>
-
-                  <div className="flex-1">
-                    {/* Original Text */}
-                    <p className={`text-lg leading-relaxed transition-colors ${
-                      isCurrentlyPlaying 
-                        ? 'text-blue-900 font-semibold' 
-                        : item.type !== 'good' 
-                          ? 'text-gray-800 font-medium' 
-                          : 'text-gray-500'
-                    }`}>
-                      {item.original}
-                    </p>
-
-                    {/* Always Show AI Feedback (No Ask AI button) */}
-                    {isExpanded && (
-                      <div className="mt-4 animate-in slide-in-from-top-2 fade-in duration-300">
-                        {item.type === 'suggestion' && item.improved && (
-                          <div className="bg-white rounded-xl border border-blue-100 p-5 shadow-sm">
-                             <div className="flex items-start gap-4 mb-3">
-                                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white shrink-0 shadow-md">
-                                  <Star size={14} fill="currentColor" />
-                                </div>
-                                <div className="flex-1">
-                                  <div className="text-xs font-bold text-blue-600 uppercase mb-1 flex items-center gap-2">
-                                    Native Speaker Version
-                                    <span className="px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded text-[10px]">Polished</span>
-                                  </div>
-                                  <p className="text-gray-900 font-serif text-lg leading-relaxed">{item.improved}</p>
-                                </div>
-                             </div>
-                             <div className="pl-12 pt-2 border-t border-gray-50 mt-3">
-                                <div className="text-xs font-bold text-gray-400 uppercase mb-3">💡 Why Better?</div>
-                                <div className="space-y-3">
-                                  {typeof item.reason === 'object' && item.reason !== null && (
-                                    <>
-                                      {item.reason.grammar && (
-                                        <div>
-                                          <div className="text-xs font-bold text-blue-600 mb-1">Grammar:</div>
-                                          <div className="text-sm text-gray-600 leading-relaxed prose prose-sm max-w-none">
-                                            <ReactMarkdown>{item.reason.grammar}</ReactMarkdown>
-                                          </div>
-                                        </div>
-                                      )}
-                                      {item.reason.content && (
-                                        <div>
-                                          <div className="text-xs font-bold text-blue-600 mb-1">Content:</div>
-                                          <div className="text-sm text-gray-600 leading-relaxed prose prose-sm max-w-none">
-                                            <ReactMarkdown>{item.reason.content}</ReactMarkdown>
-                                          </div>
-                                        </div>
-                                      )}
-                                      {item.reason.expression && (
-                                        <div>
-                                          <div className="text-xs font-bold text-blue-600 mb-1">Expression:</div>
-                                          <div className="text-sm text-gray-600 leading-relaxed prose prose-sm max-w-none">
-                                            <ReactMarkdown>{item.reason.expression}</ReactMarkdown>
-                                          </div>
-                                        </div>
-                                      )}
-                                      {item.reason.tip && (
-                                        <div className="mt-3 pt-3 border-t border-blue-50">
-                                          <div className="text-xs font-bold text-indigo-600 mb-1 flex items-center gap-1">
-                                            <Star size={12} className="fill-indigo-200" />
-                                            Actionable Tip:
-                                          </div>
-                                          <div className="text-sm text-indigo-700 leading-relaxed bg-indigo-50 p-2 rounded-lg prose prose-sm max-w-none">
-                                            <ReactMarkdown>{item.reason.tip}</ReactMarkdown>
-                                          </div>
-                                        </div>
-                                      )}
-                                    </>
-                                  )}
-                                </div>
-                             </div>
-                          </div>
-                        )}
-                        {item.type === 'good' && (
-                          <div className="bg-green-50 rounded-xl border border-green-100 p-5 shadow-sm">
-                            <div className="flex items-start gap-3">
-                              <div className="w-8 h-8 rounded-full bg-green-500 flex items-center justify-center text-white shrink-0">
-                                <CheckCircle2 size={16} />
-                              </div>
-                              <div>
-                                <div className="text-xs font-bold text-green-700 uppercase mb-1">Great Job!</div>
-                                <p className="text-sm text-green-800 leading-relaxed">{item.reason}</p>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Chevron */}
-                  <div className={`mt-1 shrink-0 transition-colors ${
-                    isCurrentlyPlaying ? 'text-blue-600' : 'text-gray-300'
-                  }`}>
-                      {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )})}
-        </div>
-      </div>
-
-      {/* Section C: Loop (Fixed Bottom) */}
-      <div className="fixed bottom-6 left-0 right-0 flex justify-center pointer-events-none z-20">
-        <div className="bg-white/90 backdrop-blur-md p-2 rounded-2xl shadow-xl border border-gray-200 pointer-events-auto flex gap-3 pl-4 pr-4"> 
+        {/* Practice Again Button */}
+        <div className="fixed bottom-6 left-0 right-0 flex justify-center pointer-events-none z-20">
           <button 
             onClick={backToHome}
-            className="flex items-center gap-2 px-8 py-3 bg-gray-900 hover:bg-black text-white rounded-xl font-bold shadow-lg transition-transform hover:-translate-y-1 active:translate-y-0"
+            className="pointer-events-auto flex items-center gap-2 px-8 py-3 bg-gray-900 hover:bg-black text-white rounded-xl font-bold shadow-lg"
           >
             <RefreshCcw size={18} />
             Practice Again
           </button>
-          <div className="hidden md:flex items-center gap-3 px-4 text-sm text-gray-500">
-            <span>Apply what you learned!</span>
-          </div>
         </div>
       </div>
-
-    </div>
-  );
+    );
+  };
 
   // Side Navigation (Unchanged)
   const Sidebar = () => (
@@ -910,9 +969,9 @@ const App = () => {
         <span className="text-white font-bold text-xl">T</span>
       </div>
       <nav className="flex-1 flex flex-col gap-6 w-full px-2">
-        <NavItem icon={<Home size={20} />} label="Home" disabled />
-        <NavItem icon={<BookOpen size={20} />} label="Practice" active />
-        <NavItem icon={<BarChart2 size={20} />} label="Stats" disabled />
+        <NavItem icon={<Home size={20} />} disabled />
+        <NavItem icon={<BookOpen size={20} />} active />
+        <NavItem icon={<BarChart2 size={20} />} disabled />
       </nav>
       <div className="mt-auto pb-4">
         <div className="w-10 h-10 rounded-full bg-gray-800 flex items-center justify-center text-gray-400 hover:text-white transition-colors cursor-pointer">
@@ -946,7 +1005,9 @@ const App = () => {
         <div className="flex items-center gap-3">
           <span className="text-sm font-medium text-gray-500">Task 1</span>
           <ChevronRight size={16} className="text-gray-300" />
-          <span className="text-sm font-semibold text-gray-900 truncate max-w-[200px]">{QUESTION_DATA.title}</span>
+          <span className="text-sm font-semibold text-gray-900 truncate max-w-[200px]">
+            {currentQuestion?.instruction.substring(0, 30) || 'Loading...'}...
+          </span>
         </div>
         
         {/* Progress Dots */}
@@ -965,6 +1026,25 @@ const App = () => {
            })}
         </div>
       </header>
+
+      {/* Global Error Alert */}
+      {apiError && (
+        <div className="fixed top-20 left-1/2 transform -translate-x-1/2 z-50 max-w-md w-full mx-4 animate-in slide-in-from-top-4 duration-300">
+          <div className="bg-red-50 border border-red-200 rounded-xl p-4 shadow-lg flex items-start gap-3">
+            <AlertCircle size={20} className="text-red-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <h4 className="text-red-900 font-semibold text-sm mb-1">Error</h4>
+              <p className="text-red-700 text-sm">{apiError}</p>
+            </div>
+            <button 
+              onClick={() => setApiError(null)}
+              className="text-red-400 hover:text-red-600 transition-colors"
+            >
+              <ChevronUp size={20} />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Main Content */}
       <main className="flex flex-col h-[calc(100vh-64px)] overflow-hidden relative">
