@@ -56,6 +56,7 @@ async def create_analysis(
     db.add(analysis)
     await db.flush()
     await db.refresh(analysis)
+    await db.commit()  # Commit before background task
     
     # Queue background task
     background_tasks.add_task(

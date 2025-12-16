@@ -20,7 +20,8 @@ class AnalysisResponse(BaseModel):
     """Schema for completed analysis response."""
     task_id: int
     status: str
-    report_markdown: str | None = Field(None, description="AI-generated report in Markdown")
+    report_markdown: str | None = Field(None, description="Legacy: AI-generated report in Markdown")
+    report_json: dict | None = Field(None, description="AI-generated report in JSON")
     error_message: str | None = None
     created_at: datetime
     
