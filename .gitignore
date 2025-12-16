@@ -1,12 +1,77 @@
 # Python
-.venv/
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Node.js
-node_modules/
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
 
-# Environment
+# Environment Variables
 .env
+.env.local
+.env.*.local
 
-# Data (local storage)
-data/
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Docker volumes
+backend/data/postgres/
+backend/data/minio/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+
+# Build outputs
+dist/
+build/
+*.log
+
+# Frontend
+frontend/.vite/
+frontend/dist/
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride

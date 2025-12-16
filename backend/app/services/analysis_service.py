@@ -7,8 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sess
 from app.config import settings
 from app.models import Recording, AnalysisResult, Question
 from app.services.storage_service import storage_service
-from app.services.ai.asr import transcribe_audio
-from app.services.ai.llm import generate_report
+from app.services.ai.asr import transcribe_audio, transcribe_audio_openai
+from app.services.ai.llm import generate_report, generate_report_openai
 
 
 # Create a separate engine for background tasks
@@ -19,12 +19,7 @@ bg_session_factory = async_sessionmaker(bg_engine, class_=AsyncSession, expire_o
 async def run_analysis_task(analysis_id: int, recording_id: int):
     """
     Background task to analyze a recording.
-    
-    Steps:
-    1. Download recording from MinIO
-    2. Transcribe audio using ASR
-    3. Generate report using multimodal LLM
-    4. Save result to database
+
     """
     async with bg_session_factory() as db:
         try:
@@ -51,19 +46,45 @@ async def run_analysis_task(analysis_id: int, recording_id: int):
                 object_key=recording.audio_url
             )
             
-            # Step 1: Transcribe audio
-            transcript = await transcribe_audio(audio_url)
+            # --- AI Pipeline Selection ---
             
-            # Step 2: Generate report using multimodal LLM
-            question_instruction = question.instruction if question else ""
-            report_markdown = await generate_report(
-                audio_url=audio_url,
-                transcript=transcript,
-                question_instruction=question_instruction
-            )
-            
-            # Step 3: Save result
-            await update_analysis_result(db, analysis_id, report_markdown)
+            if settings.OPENAI_API_KEY:
+                # ----------------------------------------
+                # OpenAI Workflow (JSON Only)
+                # ----------------------------------------
+                
+                # Step 1: Transcribe with Whisper (get segments)
+                transcript_data = await transcribe_audio_openai(audio_url)
+                
+                # Step 2: Analyze with GPT-4o (Structured Output + Python Logic)
+                question_instruction = question.instruction if question else ""
+                final_report_obj = await generate_report_openai(
+                    transcript_data=transcript_data,
+                    question_text=question_instruction
+                )
+                
+                # Step 3: Save JSON report
+                await update_analysis_result_json(
+                    db, 
+                    analysis_id, 
+                    report_json=final_report_obj.model_dump()
+                )
+                
+            else:
+                # ----------------------------------------
+                # LEGACY: Volcengine / Mock Workflow
+                # ----------------------------------------
+                
+                transcript = await transcribe_audio(audio_url)
+                question_instruction = question.instruction if question else ""
+                
+                report_markdown = await generate_report(
+                    audio_url=audio_url,
+                    transcript=transcript,
+                    question_instruction=question_instruction
+                )
+                
+                await update_analysis_result(db, analysis_id, report_markdown)
             
         except Exception as e:
             # Mark as failed
@@ -83,7 +104,7 @@ async def update_analysis_status(db: AsyncSession, analysis_id: int, status: str
 
 
 async def update_analysis_result(db: AsyncSession, analysis_id: int, report_markdown: str):
-    """Update analysis with completed result."""
+    """Update analysis with completed result (Markdown only)."""
     result = await db.execute(
         select(AnalysisResult).where(AnalysisResult.id == analysis_id)
     )
@@ -91,6 +112,18 @@ async def update_analysis_result(db: AsyncSession, analysis_id: int, report_mark
     if analysis:
         analysis.status = "completed"
         analysis.report_markdown = report_markdown
+        await db.commit()
+
+
+async def update_analysis_result_json(db: AsyncSession, analysis_id: int, report_json: dict):
+    """Update analysis with JSON report only."""
+    result = await db.execute(
+        select(AnalysisResult).where(AnalysisResult.id == analysis_id)
+    )
+    analysis = result.scalar_one_or_none()
+    if analysis:
+        analysis.report_json = report_json
+        analysis.status = "completed"
         await db.commit()
 
 
