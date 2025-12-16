@@ -8,7 +8,7 @@ from app.config import settings
 from app.models import Recording, AnalysisResult, Question
 from app.services.storage_service import storage_service
 from app.services.ai.asr import transcribe_audio, transcribe_audio_openai
-from app.services.ai.llm import generate_report, generate_report_openai, json_to_markdown
+from app.services.ai.llm import generate_report, generate_report_openai
 
 
 # Create a separate engine for background tasks
@@ -50,7 +50,7 @@ async def run_analysis_task(analysis_id: int, recording_id: int):
             
             if settings.OPENAI_API_KEY:
                 # ----------------------------------------
-                # NEW: OpenAI Workflow (Hybrid JSON + Markdown)
+                # OpenAI Workflow (JSON Only)
                 # ----------------------------------------
                 
                 # Step 1: Transcribe with Whisper (get segments)
@@ -63,20 +63,11 @@ async def run_analysis_task(analysis_id: int, recording_id: int):
                     question_text=question_instruction
                 )
                 
-                # Step 3: Convert to Markdown
-                transcript_text = transcript_data.get("text", "")
-                report_markdown = json_to_markdown(
-                    report=final_report_obj,
-                    transcript_preview=transcript_text[:20],
-                    question_preview=question_instruction[:50]
-                )
-                
-                # Step 4: Save BOTH formats
-                await update_analysis_result_hybrid(
+                # Step 3: Save JSON report
+                await update_analysis_result_json(
                     db, 
                     analysis_id, 
-                    report_json=final_report_obj.model_dump(),
-                    report_markdown=report_markdown
+                    report_json=final_report_obj.model_dump()
                 )
                 
             else:
@@ -124,16 +115,15 @@ async def update_analysis_result(db: AsyncSession, analysis_id: int, report_mark
         await db.commit()
 
 
-async def update_analysis_result_hybrid(db: AsyncSession, analysis_id: int, report_json: dict, report_markdown: str):
-    """Update analysis with completed result (JSON + Markdown)."""
+async def update_analysis_result_json(db: AsyncSession, analysis_id: int, report_json: dict):
+    """Update analysis with JSON report only."""
     result = await db.execute(
         select(AnalysisResult).where(AnalysisResult.id == analysis_id)
     )
     analysis = result.scalar_one_or_none()
     if analysis:
-        analysis.status = "completed"
         analysis.report_json = report_json
-        analysis.report_markdown = report_markdown
+        analysis.status = "completed"
         await db.commit()
 
 

@@ -118,55 +118,6 @@ async def generate_report_openai(transcript_data: dict, question_text: str) -> T
     return final_report
 
 
-def json_to_markdown(report: ToeflReportFinal, transcript_preview: str, question_preview: str) -> str:
-    """Convert structured report to legacy Markdown format."""
-    
-    # Build sentence analysis section
-    sentences_md = ""
-    for idx, sent in enumerate(report.sentence_analyses, 1):
-        native_section = ""
-        if sent.native_version:
-            native_section = f"\n**Native 版本**：{sent.native_version}\n"
-            
-        sentences_md += f"""
-### 句子 {idx}
-> 原文：{sent.original_text}
-
-**评价**：{sent.evaluation}
-{native_section}
-**详细说明**：
-- 语法：{sent.grammar_feedback}
-- 表达：{sent.expression_feedback}
-- 建议：{sent.suggestion_feedback}
-
----
-"""
-
-    # Build actionable tips
-    tips_md = "\n".join([f"{i+1}. {tip}" for i, tip in enumerate(report.actionable_tips)])
-
-    return f"""# TOEFL Speaking 分析报告
-
-## 📊 总体评分
-- **预估分数**: {report.total_score}/30 (等级: {report.level})
-- **Delivery**: {report.delivery_score}/10 - {report.delivery_comment}
-- **Language Use**: {report.language_score}/10 - {report.language_comment}
-- **Topic Development**: {report.topic_score}/10 - {report.topic_comment}
-
-## 💡 一句话总结
-> {report.overall_summary}
-
-## 📝 逐句分析
-{sentences_md}
-## 🎯 行动建议
-{tips_md}
-
----
-*分析时间: {transcript_preview}...*
-*题目: {question_preview}...*
-"""
-
-
 # --- Legacy / Volcengine Logic ---
 
 async def generate_report(
