@@ -1,74 +1,38 @@
 import React, { useState, useEffect, useRef } from 'react';
-import ReactMarkdown from 'react-markdown';
-import { 
-  Mic, Play, Square, Clock, ChevronRight, BarChart2, 
-  CheckCircle2, AlertCircle, Settings, Home, BookOpen, 
-  User, HelpCircle, RefreshCcw, Pause, RotateCcw, 
-  ChevronDown, ChevronUp, Star, Zap, Volume2, Sparkles, ArrowRight
-} from 'lucide-react';
+import { ChevronRight, AlertCircle, ChevronUp } from 'lucide-react';
 
 // API and Hooks
-import { fetchQuestions, uploadRecording, startAnalysis, getAnalysisResult, type Question, type AnalysisResponse } from '../services/api';
+import { fetchQuestion, uploadRecording, startAnalysis, getAnalysisResult, type Question, type AnalysisResponse } from '../services/api';
 import { useAudioRecorder } from '../hooks/useAudioRecorder';
+import { useQuestionAudio } from '../hooks/useQuestionAudio';
 
-// --- Fallback Mock Data (for development) ---
+// Default question ID for initial load
+const DEFAULT_QUESTION_ID = 'question_01KCH9WP8W6TZXA5QXS1BFF6AS';
 
-const MOCK_REPORT = {
-  score: 23,
-  level: "Good",
-  radar: { delivery: "Fair", language: "Good", topic: "Good" },
-  summary: "Logic is clear, arguments are strong. However, linking sounds and past tense usage could be more native-like.",
-  transcript: [
-    { 
-      id: 1, 
-      original: "I think take a gap year is good for students.", 
-      improved: "I believe taking a gap year is highly beneficial for students.",
-      reason: {
-        grammar: "When a verb acts as the subject of a sentence, we need the gerund form ('-ing'). You wrote 'take' but it should be 'taking'.",
-        expression: "Instead of the basic word 'good', native speakers prefer more precise academic vocabulary like 'beneficial' or 'advantageous' in formal contexts.",
-        tip: "Practice using gerunds as subjects: 'Swimming is fun', 'Reading helps learning'. Also, build your academic vocabulary list with words like beneficial, significant, crucial."
-      },
-      type: "suggestion",
-      startTime: 0,
-      endTime: 3
-    },
-    { 
-      id: 2, 
-      original: "It helps them to earn money and know what they want.", 
-      improved: "It allows them to achieve financial independence and gain career clarity.",
-      reason: {
-        content: "Your idea about earning money and self-discovery is excellent! But you can make it more impactful by being specific about the *outcomes* rather than just the actions.",
-        expression: "The phrase 'earn money' is casual. 'Achieve financial independence' is more sophisticated and emphasizes the benefit. Similarly, 'gain career clarity' is much stronger than 'know what they want'.",
-        tip: "When making arguments, focus on specific outcomes and benefits. Replace vague phrases with precise terminology: instead of 'learn things' → 'develop skills', instead of 'get better' → 'enhance proficiency'."
-      },
-      type: "suggestion",
-      startTime: 3,
-      endTime: 8
-    },
-    { 
-      id: 3, 
-      original: "So, I agree with this statement.", 
-      improved: null,
-      reason: "Perfect closing! Your conclusion is clear and direct. This kind of simple, confident statement works really well in TOEFL speaking. Keep doing this! 💪",
-      type: "good",
-      startTime: 8,
-      endTime: 11
-    },
-    {
-      id: 4,
-      original: "Because they can learn many things from working.",
-      improved: "Through real-world work experience, they develop practical skills that can't be taught in a classroom.",
-      reason: {
-        content: "You're providing a supporting reason, which is great! However, 'many things' is too vague. Strong arguments need specific examples of *what* makes the experience valuable.",
-        expression: "Native speakers avoid vague words like 'many things'. Instead, they use concrete nouns ('practical skills') and add qualifying details ('that can't be taught in a classroom') to strengthen the claim.",
-        tip: "Replace vague quantifiers with specific categories. Instead of 'many things' → specify what: 'practical skills', 'industry knowledge', 'professional networks'. This makes your argument much more convincing."
-      },
-      type: "suggestion",
-      startTime: 11,
-      endTime: 16
-    }
-  ]
-};
+// Development mode - skip microphone permission check for UI debugging
+// Auto-detect: skip if getUserMedia is not available (e.g., Cursor Visual Editor, some webviews)
+const isMediaDevicesSupported = typeof navigator !== 'undefined' 
+  && navigator.mediaDevices 
+  && typeof navigator.mediaDevices.getUserMedia === 'function';
+
+// Dev mode: skip mic check for UI debugging in Visual Editor
+// Can be enabled via: VITE_DEV_SKIP_MIC=true npm run dev
+const DEV_FORCE_SKIP_MIC = import.meta.env.VITE_DEV_SKIP_MIC === 'true';
+const DEV_SKIP_MIC_CHECK = DEV_FORCE_SKIP_MIC || !isMediaDevicesSupported;
+
+// Layout Components
+import { Sidebar } from './components/layout/Sidebar';
+
+// Page Components
+import { 
+  DetailPage, 
+  PrepPage, 
+  RecordingPage, 
+  ConfirmationPage, 
+  AnalyzingPage, 
+  ReportPage,
+  type AnalysisStep 
+} from './pages';
 
 const App = () => {
   // Core Steps: 'detail' (P1) -> 'prep_tts' (P2-1) -> 'prep_countdown' (P2-2) -> 'recording' (P3) -> 'confirmation' (P4) -> 'analyzing' (P4.5) -> 'report' (P5)
@@ -86,57 +50,71 @@ const App = () => {
   // Audio Player State (P4 & P5)
   const [isPlaying, setIsPlaying] = useState(false);
   const [audioProgress, setAudioProgress] = useState(0);
-  const audioTotalTime = 45; // Total recording time in seconds
+  const [audioDuration, setAudioDuration] = useState(45); // Actual recording duration
+  const recordingPlayerRef = useRef<HTMLAudioElement | null>(null);
+  const recordingBlobUrlRef = useRef<string | null>(null);
   
   // P4.5 Analysis Progress State
-  const [analysisSteps, setAnalysisSteps] = useState([
-    { id: 1, label: 'Transcription', status: 'pending' }, // pending, processing, completed
+  const [analysisSteps, setAnalysisSteps] = useState<AnalysisStep[]>([
+    { id: 1, label: 'Transcription', status: 'pending' },
     { id: 2, label: 'Rating', status: 'pending' },
     { id: 3, label: 'Grammar Analysis', status: 'pending' },
     { id: 4, label: 'Generating Feedback', status: 'pending' }
   ]);
   
   // P5 Report State
-  const [expandedSentenceId, setExpandedSentenceId] = useState<number | null>(null); // Currently expanded sentence
-  
-  // P5 Audio Sync State
-  const [currentPlayingSentence, setCurrentPlayingSentence] = useState<number | null>(null);
+  const [expandedSentenceId, setExpandedSentenceId] = useState<number | null>(null);
 
-  // NEW: Backend Integration State
-  const [questions, setQuestions] = useState<Question[]>([]);
+  // Backend Integration State
   const [currentQuestion, setCurrentQuestion] = useState<Question | null>(null);
-  const [isLoadingQuestions, setIsLoadingQuestions] = useState(false);
+  const [isLoadingQuestion, setIsLoadingQuestion] = useState(false);
   const [recordingId, setRecordingId] = useState<number | null>(null);
   const [taskId, setTaskId] = useState<number | null>(null);
   const [analysisReport, setAnalysisReport] = useState<AnalysisResponse | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
   
-  // NEW: Audio Recorder Hook
+  // Microphone Permission State
+  const [micPermission, setMicPermission] = useState<'granted' | 'denied' | 'prompt' | 'unknown'>('unknown');
+  
+  // Audio Recorder Hook
   const audioRecorder = useAudioRecorder();
+  
+  // Question Audio Hook (for playing question audio and beeps)
+  const questionAudio = useQuestionAudio();
 
   // ---------------- Logic Controllers ----------------
 
-  // P1: Fetch Questions on Mount
+  // P1: Fetch default question on Mount and cache audio
   useEffect(() => {
-    const loadQuestions = async () => {
-      setIsLoadingQuestions(true);
+    const loadQuestion = async () => {
+      setIsLoadingQuestion(true);
       setApiError(null);
       try {
-        const data = await fetchQuestions();
-        setQuestions(data.questions);
-        if (data.questions.length > 0) {
-          setCurrentQuestion(data.questions[0]);
+        const question = await fetchQuestion(DEFAULT_QUESTION_ID);
+        setCurrentQuestion(question);
+        
+        // Pre-load and cache the question audio
+        if (question.audio_url) {
+          await questionAudio.loadAudio(question.audio_url);
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to load questions';
+        const message = error instanceof Error ? error.message : 'Failed to load question';
         setApiError(message);
-        console.error('Error fetching questions:', error);
+        console.error('Error fetching question:', error);
       } finally {
-        setIsLoadingQuestions(false);
+        setIsLoadingQuestion(false);
       }
     };
-    loadQuestions();
+    loadQuestion();
   }, []);
+
+  // Pre-warm microphone when countdown is about to end (5 seconds left)
+  useEffect(() => {
+    if (currentStep === 'prep_countdown' && timeLeft === 5 && !DEV_SKIP_MIC_CHECK) {
+      console.log('Pre-warming microphone for recording...');
+      audioRecorder.warmup();
+    }
+  }, [currentStep, timeLeft]);
 
   // Countdown Logic
   useEffect(() => {
@@ -153,81 +131,57 @@ const App = () => {
     };
   }, [isTimerRunning, isPaused, timeLeft]);
 
-  // P2 Auto Flow: TTS -> Beep -> Countdown
-  useEffect(() => {
-    if (currentStep === 'prep_tts') {
-      // Simulate TTS Duration (3s)
-      const ttsTimer = setTimeout(() => {
-        // Play Beep Sound (Mock)
-        // console.log("Beep!"); 
-        startPrepCountdown();
-      }, 3000);
-      return () => clearTimeout(ttsTimer);
-    }
-  }, [currentStep]);
+  // P2 Auto Flow: When in prep_tts, audio is playing. After audio ends, beep and start countdown.
+  // This effect is now handled by startPracticeFlow which plays audio then transitions.
 
-  // Recording Waveform Animation - Updated to use real audio levels
+  // Recording Waveform Animation - use ref to access latest audioLevel without re-triggering effect
+  const audioLevelRef = useRef(audioRecorder.audioLevel);
+  audioLevelRef.current = audioRecorder.audioLevel;
+
   useEffect(() => {
     if (currentStep === 'recording' && isTimerRunning && !isPaused && audioRecorder.isRecording) {
       const updateBars = () => {
-        // Use real audio level from recorder, with some randomization for visual effect
-        const baseLevel = audioRecorder.audioLevel / 2; // Normalize from 0-100 to 0-50
-        setAudioBars(prev => prev.map(() => Math.max(8, baseLevel + Math.random() * 20)));
+        // Read from ref to get latest value without dependency issues
+        const baseLevel = audioLevelRef.current;
+        setAudioBars(prev => prev.map(() => {
+          // Add more variation based on audio level
+          const variation = Math.random() * 30 * (1 + baseLevel / 50);
+          return Math.max(8, 10 + baseLevel / 2 + variation);
+        }));
       };
-      const barInterval = setInterval(updateBars, 100);
+      const barInterval = setInterval(updateBars, 80);
       return () => clearInterval(barInterval);
     } else if (currentStep !== 'recording' || isPaused) {
-      // Reset bars when not recording or paused
       setAudioBars(new Array(30).fill(10));
     }
-  }, [currentStep, isTimerRunning, isPaused, audioRecorder.isRecording, audioRecorder.audioLevel]);
+  }, [currentStep, isTimerRunning, isPaused, audioRecorder.isRecording]);
 
-  // Audio Player Progress (P4 & P5)
+  // Cleanup recording player on unmount or when leaving confirmation page
   useEffect(() => {
-    let interval: ReturnType<typeof setInterval> | null = null;
-    if (isPlaying && audioProgress < audioTotalTime) {
-      interval = setInterval(() => {
-        setAudioProgress((prev) => {
-          const newProgress = prev + 0.1;
-          if (newProgress >= audioTotalTime) {
-            setIsPlaying(false);
-            return audioTotalTime;
-          }
-          
-          // P5: Update currently playing sentence based on time
-          if (currentStep === 'report') {
-            const current = MOCK_REPORT.transcript.find(
-              (item) => newProgress >= item.startTime && newProgress < item.endTime
-            );
-            if (current) {
-              setCurrentPlayingSentence(current.id);
-            } else {
-              setCurrentPlayingSentence(null);
-            }
-          }
-          
-          return newProgress;
-        });
-      }, 100);
-    }
     return () => {
-      if (interval) clearInterval(interval);
+      if (recordingPlayerRef.current) {
+        recordingPlayerRef.current.pause();
+        recordingPlayerRef.current = null;
+      }
+      if (recordingBlobUrlRef.current) {
+        URL.revokeObjectURL(recordingBlobUrlRef.current);
+        recordingBlobUrlRef.current = null;
+      }
     };
-  }, [isPlaying, audioProgress, audioTotalTime, currentStep]);
+  }, []);
 
-  // P4.5 Analysis Polling - Real backend polling
+  // P4.5 Analysis Polling
   useEffect(() => {
     if (currentStep === 'analyzing' && taskId) {
-      // Reset analysis steps
       setAnalysisSteps([
-        { id: 1, label: 'Transcription', status: 'completed' }, // Already completed (upload done)
-        { id: 2, label: 'Rating', status: 'completed' }, // Already completed (task created)
+        { id: 1, label: 'Transcription', status: 'completed' },
+        { id: 2, label: 'Rating', status: 'completed' },
         { id: 3, label: 'AI Analysis', status: 'processing' },
         { id: 4, label: 'Generating Report', status: 'pending' }
       ]);
 
       let pollCount = 0;
-      const maxPolls = 60; // Maximum 2 minutes (60 * 2 seconds)
+      const maxPolls = 60;
 
       const pollInterval = setInterval(async () => {
         pollCount++;
@@ -243,7 +197,6 @@ const App = () => {
           const result = await getAnalysisResult(taskId);
           
           if (result.status === 'completed') {
-            // Analysis complete!
             setAnalysisSteps(prev => prev.map(s => ({...s, status: 'completed'})));
             setAnalysisReport(result);
             clearInterval(pollInterval);
@@ -253,7 +206,6 @@ const App = () => {
             setApiError(result.error_message || 'Analysis failed');
             setCurrentStep('confirmation');
           } else {
-            // Still processing - update UI
             setAnalysisSteps(prev => prev.map(s => 
               s.id === 3 ? {...s, status: 'processing'} : 
               s.id === 4 ? {...s, status: 'pending'} : s
@@ -261,52 +213,128 @@ const App = () => {
           }
         } catch (error) {
           console.error('Error polling analysis:', error);
-          // Continue polling on error
         }
-      }, 2000); // Poll every 2 seconds
+      }, 2000);
 
       return () => clearInterval(pollInterval);
     }
   }, [currentStep, taskId]);
 
-  const handleTimerComplete = () => {
+  const handleTimerComplete = async () => {
     if (currentStep === 'prep_countdown') {
-      // P2 End -> P3
+      // Play beep before starting recording
+      await questionAudio.playBeep();
       startRecordingPhase();
     } else if (currentStep === 'recording') {
-      // P3 End -> P4
       finishRecording();
     }
   };
 
   // ---------------- Actions ----------------
 
-  const startPracticeFlow = () => {
-    // P1 -> P2 (TTS Phase)
-    setCurrentStep('prep_tts');
+  // Request microphone permission before starting practice
+  const requestMicrophonePermission = async (): Promise<boolean> => {
+    // Skip permission check in dev mode (for UI debugging in Visual Editor)
+    if (DEV_SKIP_MIC_CHECK) {
+      console.warn('[DEV MODE] Skipping microphone permission check');
+      setMicPermission('granted');
+      return true;
+    }
+    
+    try {
+      // Check current permission status using Permissions API if available
+      if (navigator.permissions && navigator.permissions.query) {
+        const result = await navigator.permissions.query({ name: 'microphone' as PermissionName });
+        setMicPermission(result.state as 'granted' | 'denied' | 'prompt');
+        
+        if (result.state === 'denied') {
+          setApiError('麦克风权限已被拒绝。请在浏览器设置中允许麦克风访问，然后刷新页面重试。');
+          return false;
+        }
+      }
+      
+      // Request microphone access to trigger browser permission prompt
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      
+      // Permission granted - stop the stream immediately (we'll start recording later)
+      stream.getTracks().forEach(track => track.stop());
+      setMicPermission('granted');
+      return true;
+    } catch (error) {
+      console.error('Microphone permission error:', error);
+      setMicPermission('denied');
+      
+      if (error instanceof DOMException) {
+        if (error.name === 'NotAllowedError') {
+          setApiError('请允许麦克风权限以进行录音练习。点击浏览器地址栏左侧的锁图标，允许麦克风访问。');
+        } else if (error.name === 'NotFoundError') {
+          setApiError('未检测到麦克风设备。请连接麦克风后重试。');
+        } else {
+          setApiError(`麦克风访问失败: ${error.message}`);
+        }
+      }
+      return false;
+    }
+  };
+
+  // Start the practice flow: Check permission -> Play question audio -> beep -> 15s countdown -> beep -> recording
+  const startPracticeFlow = async () => {
+    setApiError(null);
+    
+    // Step 0: Request microphone permission first
+    const hasPermission = await requestMicrophonePermission();
+    if (!hasPermission) {
+      return; // Stop if permission denied
+    }
+    
     setIsSOSOpen(false);
+    
+    // Step 1: Switch to prep_tts page AND start playing audio simultaneously
+    // Use Promise.all to ensure UI updates and audio starts at the same time
+    setCurrentStep('prep_tts');
+    
+    try {
+      // Start audio playback immediately (audio should already be preloaded)
+      await questionAudio.playQuestionAudio();
+      
+      // Step 2: Play beep to signal countdown start
+      await questionAudio.playBeep();
+      
+      // Step 3: Start 15 second countdown
+      startPrepCountdown();
+    } catch (error) {
+      console.error('Error in practice flow:', error);
+      // If audio fails, still proceed with countdown after beep
+      try {
+        await questionAudio.playBeep();
+      } catch {}
+      startPrepCountdown();
+    }
   };
 
   const startPrepCountdown = () => {
-    // P2 TTS End -> P2 Countdown
     setCurrentStep('prep_countdown');
     setTimeLeft(15);
     setIsTimerRunning(true);
   };
 
-  const startRecordingPhase = async () => {
-    // P2 -> P3
+  const startRecordingPhase = () => {
+    // Update UI immediately - no waiting
     setCurrentStep('recording');
     setTimeLeft(45);
     setIsTimerRunning(true);
     
-    // Start real audio recording
-    try {
-      await audioRecorder.startRecording();
-    } catch (error) {
+    // Skip actual recording in dev mode (for UI debugging)
+    if (DEV_SKIP_MIC_CHECK) {
+      console.warn('[DEV MODE] Skipping actual recording - microphone not available');
+      return;
+    }
+    
+    // Start recording in background (don't await)
+    audioRecorder.startRecording().catch((error) => {
       console.error('Failed to start recording:', error);
       setApiError('Failed to access microphone. Please check permissions.');
-    }
+    });
   };
 
   const togglePause = () => {
@@ -319,21 +347,177 @@ const App = () => {
   };
 
   const restartPractice = () => {
-    // Retry: Back to Prep
+    // Stop and clean up recording playback
+    if (recordingPlayerRef.current) {
+      recordingPlayerRef.current.pause();
+      recordingPlayerRef.current = null;
+    }
+    if (recordingBlobUrlRef.current) {
+      URL.revokeObjectURL(recordingBlobUrlRef.current);
+      recordingBlobUrlRef.current = null;
+    }
+    
+    // Reset playback state
+    setIsPlaying(false);
+    setAudioProgress(0);
+    setAudioDuration(45);
+    
+    // Stop recording
     setIsTimerRunning(false);
     setIsPaused(false);
     audioRecorder.stopRecording();
     audioRecorder.clearRecording();
-    startPracticeFlow(); 
+    
+    // Start new practice flow
+    startPracticeFlow();
   };
 
+  // Track the calculated duration when recording finishes
+  const calculatedDurationRef = useRef(45);
+  
   const finishRecording = () => {
+    // Calculate actual recording duration: initial time (45s) - remaining time
+    const actualRecordingDuration = 45 - timeLeft;
+    const finalDuration = actualRecordingDuration > 0 ? actualRecordingDuration : 45;
+    calculatedDurationRef.current = finalDuration;
+    
+    console.log('[finishRecording] timeLeft:', timeLeft, 'actualRecordingDuration:', actualRecordingDuration, 'finalDuration:', finalDuration);
+    
     setIsTimerRunning(false);
     audioRecorder.stopRecording();
+    
+    // Reset playback state
+    setAudioProgress(0);
+    setIsPlaying(false);
+    
+    // In dev mode, set calculated duration since we don't have real recording
+    if (DEV_SKIP_MIC_CHECK) {
+      console.warn('[DEV MODE] No actual recording - using calculated duration:', finalDuration);
+      setAudioDuration(finalDuration);
+      setCurrentStep('confirmation');
+      return;
+    }
+    
+    // Set calculated duration immediately (will be updated when blob is ready)
+    setAudioDuration(finalDuration);
     setCurrentStep('confirmation');
   };
+  
+  // Effect to set up audio playback when blob becomes available
+  useEffect(() => {
+    // Only set up player when in confirmation step and we have a blob
+    if (currentStep !== 'confirmation' || !audioRecorder.audioBlob || DEV_SKIP_MIC_CHECK) {
+      return;
+    }
+    
+    // Skip if player already exists for this blob
+    if (recordingPlayerRef.current) {
+      return;
+    }
+    
+    const blob = audioRecorder.audioBlob;
+    console.log('[useEffect] Audio blob available, setting up player. Size:', blob.size, 'Type:', blob.type);
+    
+    // Clean up old blob URL
+    if (recordingBlobUrlRef.current) {
+      URL.revokeObjectURL(recordingBlobUrlRef.current);
+    }
+    
+    // Create new blob URL for playback
+    const blobUrl = URL.createObjectURL(blob);
+    recordingBlobUrlRef.current = blobUrl;
+    
+    // Create audio element for playback
+    const audio = new Audio();
+    audio.preload = 'metadata';
+    
+    audio.addEventListener('loadedmetadata', () => {
+      const metadataDuration = audio.duration;
+      console.log('[useEffect] Audio metadata loaded, duration:', metadataDuration);
+      if (isFinite(metadataDuration) && !isNaN(metadataDuration) && metadataDuration > 0) {
+        setAudioDuration(metadataDuration);
+      }
+    });
+    audio.addEventListener('canplaythrough', () => {
+      console.log('[useEffect] Audio ready to play');
+    });
+    audio.addEventListener('timeupdate', () => {
+      setAudioProgress(audio.currentTime);
+    });
+    audio.addEventListener('ended', () => {
+      setIsPlaying(false);
+      setAudioProgress(0);
+    });
+    audio.addEventListener('error', (e) => {
+      console.error('[useEffect] Audio error:', audio.error?.message, audio.error?.code);
+    });
+    
+    // Set source and load
+    audio.src = blobUrl;
+    audio.load();
+    
+    recordingPlayerRef.current = audio;
+  }, [currentStep, audioRecorder.audioBlob]);
 
   const submitForAnalysis = async () => {
+    // In dev mode, skip to analyzing step for UI debugging
+    if (DEV_SKIP_MIC_CHECK) {
+      console.warn('[DEV MODE] Skipping actual analysis submission');
+      setCurrentStep('analyzing');
+      // Simulate analysis completion after 3 seconds
+      setTimeout(() => {
+        setAnalysisSteps(prev => prev.map(s => ({...s, status: 'completed'})));
+        // Set mock report for UI testing
+        setAnalysisReport({
+          task_id: 0,
+          status: 'completed',
+          report_markdown: null,
+          report_json: {
+            delivery_score: 8,
+            delivery_comment: 'Good pace and clarity',
+            language_score: 7,
+            language_comment: 'Minor grammar issues',
+            topic_score: 8,
+            topic_comment: 'Well-developed ideas',
+            total_score: 23,
+            level: 'Good',
+            overall_summary: '[DEV MODE] This is a mock report for UI debugging. Your response demonstrates good speaking skills with clear pronunciation and logical structure.',
+            sentence_analyses: [
+              {
+                original_text: 'I believe that taking a gap year is beneficial.',
+                evaluation: '✅ 优秀',
+                native_version: 'I firmly believe that taking a gap year can be highly beneficial.',
+                grammar_feedback: '语法正确',
+                expression_feedback: '表达清晰',
+                suggestion_feedback: '可以使用更高级的词汇如 "firmly believe" 来增强语气',
+                start_time: 0,
+                end_time: 3,
+              },
+              {
+                original_text: 'Because it give students time to explore.',
+                evaluation: '⚡ 可改进',
+                native_version: 'Because it gives students valuable time to explore their interests.',
+                grammar_feedback: '主谓一致错误: "it give" 应为 "it gives"',
+                expression_feedback: '表达较简单',
+                suggestion_feedback: '添加形容词如 "valuable" 来丰富表达',
+                start_time: 3,
+                end_time: 6,
+              },
+            ],
+            actionable_tips: [
+              '注意第三人称单数动词变化',
+              '使用更丰富的形容词来增强表达',
+              '保持良好的语速和停顿',
+            ],
+          },
+          error_message: null,
+          created_at: new Date().toISOString(),
+        });
+        setTimeout(() => setCurrentStep('report'), 500);
+      }, 2000);
+      return;
+    }
+    
     if (!audioRecorder.audioBlob) {
       setApiError('No recording available');
       return;
@@ -348,653 +532,214 @@ const App = () => {
     setApiError(null);
 
     try {
-      // Step 1: Upload recording
       setAnalysisSteps(prev => prev.map(s => s.id === 1 ? {...s, status: 'processing'} : s));
       const uploadResult = await uploadRecording(audioRecorder.audioBlob, currentQuestion.question_id);
       setRecordingId(uploadResult.id);
       setAnalysisSteps(prev => prev.map(s => s.id === 1 ? {...s, status: 'completed'} : s));
 
-      // Step 2: Start analysis
       setAnalysisSteps(prev => prev.map(s => s.id === 2 ? {...s, status: 'processing'} : s));
       const analysisResult = await startAnalysis(uploadResult.id);
       setTaskId(analysisResult.task_id);
       setAnalysisSteps(prev => prev.map(s => s.id === 2 ? {...s, status: 'completed'} : s));
-
-      // Note: Polling will be handled in a separate useEffect (P4.5)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to submit recording';
       setApiError(message);
       console.error('Error submitting for analysis:', error);
-      setCurrentStep('confirmation'); // Go back to confirmation page
+      setCurrentStep('confirmation');
     }
   };
 
   const backToHome = () => {
-    // Reset to P1
+    // Clean up recording player
+    if (recordingPlayerRef.current) {
+      recordingPlayerRef.current.pause();
+      recordingPlayerRef.current = null;
+    }
+    if (recordingBlobUrlRef.current) {
+      URL.revokeObjectURL(recordingBlobUrlRef.current);
+      recordingBlobUrlRef.current = null;
+    }
+    
     setCurrentStep('detail');
     setTimeLeft(15);
     setIsTimerRunning(false);
     setIsSOSOpen(false);
     setExpandedSentenceId(null);
     setAudioProgress(0);
+    setAudioDuration(45);
     setIsPlaying(false);
   };
 
-  // P5: Jump to specific audio timestamp when clicking a sentence
-  const jumpToAudioTime = (startTime: number) => {
-    setAudioProgress(startTime);
-    setIsPlaying(true);
+  // Seek to a specific time in the recording
+  const seekAudio = (time: number) => {
+    const player = recordingPlayerRef.current;
+    if (player) {
+      player.currentTime = time;
+      setAudioProgress(time);
+    }
   };
 
-  // Audio Player Controls
-  const toggleAudioPlay = () => {
+  const toggleAudioPlay = async () => {
+    const player = recordingPlayerRef.current;
+    
+    if (!player) {
+      console.error('No recording player available');
+      // If no player but we have a blob, try to create one
+      if (audioRecorder.audioBlob) {
+        console.log('[toggleAudioPlay] Creating new player from blob. Size:', audioRecorder.audioBlob.size, 'Type:', audioRecorder.audioBlob.type);
+        
+        const blobUrl = URL.createObjectURL(audioRecorder.audioBlob);
+        recordingBlobUrlRef.current = blobUrl;
+        
+        const audio = new Audio();
+        audio.preload = 'auto';
+        
+        // Wait for audio to be ready before playing
+        await new Promise<void>((resolve, reject) => {
+          const onCanPlay = () => {
+            audio.removeEventListener('canplaythrough', onCanPlay);
+            audio.removeEventListener('error', onError);
+            resolve();
+          };
+          const onError = () => {
+            audio.removeEventListener('canplaythrough', onCanPlay);
+            audio.removeEventListener('error', onError);
+            reject(new Error(audio.error?.message || 'Audio load failed'));
+          };
+          
+          audio.addEventListener('canplaythrough', onCanPlay);
+          audio.addEventListener('error', onError);
+          audio.src = blobUrl;
+          audio.load();
+        });
+        
+        audio.addEventListener('loadedmetadata', () => {
+          const dur = audio.duration;
+          if (isFinite(dur) && !isNaN(dur) && dur > 0) {
+            setAudioDuration(dur);
+          }
+        });
+        audio.addEventListener('timeupdate', () => {
+          setAudioProgress(audio.currentTime);
+        });
+        audio.addEventListener('ended', () => {
+          setIsPlaying(false);
+          setAudioProgress(0);
+        });
+        
+        recordingPlayerRef.current = audio;
+        
+        try {
+          await audio.play();
+          setIsPlaying(true);
+        } catch (err) {
+          console.error('Failed to play recording:', err);
+        }
+      }
+      return;
+    }
+    
     if (isPlaying) {
+      player.pause();
       setIsPlaying(false);
     } else {
-      setIsPlaying(true);
-      if (audioProgress >= audioTotalTime) {
+      // Reset if at end - check for valid duration
+      const dur = player.duration;
+      if (isFinite(dur) && !isNaN(dur) && player.currentTime >= dur) {
+        player.currentTime = 0;
         setAudioProgress(0);
+      }
+      try {
+        await player.play();
+        setIsPlaying(true);
+      } catch (err) {
+        console.error('Failed to play recording:', err);
       }
     }
   };
 
   const formatTime = (seconds: number) => {
+    // Handle invalid values (Infinity, NaN, negative)
+    if (!isFinite(seconds) || isNaN(seconds) || seconds < 0) {
+      return '00:00';
+    }
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // ---------------- Component Views ----------------
+  // ---------------- Render ----------------
 
-  // P1: Question Detail & SOS
-  const renderDetail = () => {
-    if (isLoadingQuestions) {
-      return (
-        <div className="flex items-center justify-center h-full">
-          <div className="text-center">
-            <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-            <p className="text-gray-600">Loading questions...</p>
-          </div>
-        </div>
-      );
+  const renderCurrentPage = () => {
+    switch (currentStep) {
+      case 'detail':
+        return (
+          <DetailPage
+            isLoadingQuestions={isLoadingQuestion}
+            apiError={apiError}
+            currentQuestion={currentQuestion}
+            isSOSOpen={isSOSOpen}
+            setIsSOSOpen={setIsSOSOpen}
+            onStartPractice={startPracticeFlow}
+          />
+        );
+      
+      case 'prep_tts':
+      case 'prep_countdown':
+        return (
+          <PrepPage
+            currentStep={currentStep as 'prep_tts' | 'prep_countdown'}
+            currentQuestion={currentQuestion}
+            timeLeft={timeLeft}
+          />
+        );
+      
+      case 'recording':
+        return (
+          <RecordingPage
+            currentQuestion={currentQuestion}
+            timeLeft={timeLeft}
+            isPaused={isPaused}
+            audioBars={audioBars}
+            onTogglePause={togglePause}
+            onRestart={restartPractice}
+            onFinish={finishRecording}
+          />
+        );
+      
+      case 'confirmation':
+        return (
+          <ConfirmationPage
+            isPlaying={isPlaying}
+            audioProgress={audioProgress}
+            audioTotalTime={audioDuration}
+            onTogglePlay={toggleAudioPlay}
+            onSeek={seekAudio}
+            onSubmit={submitForAnalysis}
+            onRestart={restartPractice}
+            formatTime={formatTime}
+          />
+        );
+      
+      case 'analyzing':
+        return (
+          <AnalyzingPage analysisSteps={analysisSteps} />
+        );
+      
+      case 'report':
+        return (
+          <ReportPage
+            analysisReport={analysisReport}
+            expandedSentenceId={expandedSentenceId}
+            setExpandedSentenceId={setExpandedSentenceId}
+            onBackToHome={backToHome}
+          />
+        );
+      
+      default:
+        return null;
     }
-
-    if (apiError || !currentQuestion) {
-      return (
-        <div className="flex items-center justify-center h-full">
-          <div className="text-center max-w-md">
-            <AlertCircle size={48} className="text-red-500 mx-auto mb-4" />
-            <h3 className="text-xl font-bold text-gray-900 mb-2">Failed to Load Questions</h3>
-            <p className="text-gray-600 mb-4">{apiError || 'No questions available'}</p>
-            <button 
-              onClick={() => window.location.reload()}
-              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-            >
-              Retry
-            </button>
-          </div>
-        </div>
-      );
-    }
-
-    return (
-      <div className="flex flex-col items-center justify-center h-full max-w-3xl mx-auto w-full animate-in fade-in zoom-in-95 duration-300">
-        
-        {/* Question Card */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 md:p-12 w-full text-center mb-8 relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-400 to-indigo-500" />
-          <p className="text-sm text-gray-500 font-medium font-serif italic mb-6">
-            Do you agree or disagree with the following statement? Use specific reasons and examples to support your answer.
-          </p>
-          <h2 className="text-2xl md:text-4xl font-bold text-gray-900 leading-tight">
-            "{currentQuestion.instruction}"
-          </h2>
-        </div>
-        
-        {/* SOS Capsule (Interaction Core) */}
-        <div className="relative w-full flex flex-col items-center z-10">
-          <button 
-            onClick={() => setIsSOSOpen(!isSOSOpen)}
-            className={`
-              flex items-center gap-2 px-6 py-3 rounded-full shadow-lg transition-all duration-300
-              ${isSOSOpen 
-                ? 'bg-amber-100 text-amber-800 ring-2 ring-amber-200 translate-y-0' 
-                : 'bg-white text-gray-600 hover:bg-amber-50 -translate-y-2'}
-            `}
-          >
-            <Zap size={18} className={isSOSOpen ? "fill-amber-700" : "text-amber-500"} />
-            <span className="font-bold">{isSOSOpen ? "Hide Hints" : "No Idea? / 没思路？"}</span>
-            {isSOSOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-          </button>
-
-          {/* SOS Expanded Content */}
-          {isSOSOpen && (
-            <div className="mt-4 bg-white p-6 rounded-2xl shadow-xl border border-amber-100 w-full max-w-2xl animate-in slide-in-from-top-4 duration-300">
-              <div className="flex items-start gap-4 mb-4 pb-4 border-b border-gray-50">
-                <div className="bg-amber-100 p-2 rounded-lg text-amber-600">
-                   <Sparkles size={20} />
-                </div>
-                <div>
-                  <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Keywords & Ideas</h4>
-                  <div className="flex flex-wrap gap-2">
-                    {currentQuestion.sos_keywords.map((kw, i) => (
-                      <span key={i} className="px-3 py-1.5 bg-amber-50 text-amber-800 text-sm font-semibold rounded-lg border border-amber-100">
-                        {kw}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              </div>
-              
-              <div className="flex items-start gap-4">
-                 <div className="bg-blue-100 p-2 rounded-lg text-blue-600">
-                   <Volume2 size={20} />
-                 </div>
-                 <div>
-                  <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Starter Sentence</h4>
-                  <p className="text-gray-700 font-medium text-lg leading-relaxed">
-                    "{currentQuestion.sos_starter}"
-                  </p>
-                 </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="flex-1" /> {/* Spacer */}
-
-        <button 
-          onClick={startPracticeFlow}
-          className="mb-8 bg-blue-600 hover:bg-blue-700 text-white text-lg font-bold px-16 py-4 rounded-full shadow-xl shadow-blue-200 transition-transform hover:scale-105 active:scale-95 flex items-center gap-2"
-        >
-          <span>Start Practice</span>
-          <ArrowRight size={20} />
-        </button>
-      </div>
-    );
   };
-
-  // P2: Preparation Phase (TTS + Countdown)
-  const renderPrep = () => (
-    <div className="flex flex-col items-center h-full w-full max-w-4xl mx-auto pt-4 animate-in fade-in duration-500">
-      
-      {/* Question Fixed Top */}
-      <div className="w-full bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-8 text-center opacity-90">
-          <h2 className="text-xl font-bold text-gray-800">
-          "{currentQuestion?.instruction || ''}"
-        </h2>
-      </div>
-      
-      <div className="flex-1 flex flex-col items-center justify-center">
-        {currentStep === 'prep_tts' ? (
-           // TTS State
-           <div className="text-center animate-pulse">
-             <div className="w-20 h-20 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-6 text-blue-500">
-               <Volume2 size={40} />
-             </div>
-             <h3 className="text-xl font-semibold text-gray-700">Reading Instructions...</h3>
-             <p className="text-gray-400 mt-2">Listen carefully</p>
-           </div>
-        ) : (
-           // Countdown State
-           <div className="text-center">
-             <span className="inline-block px-4 py-1.5 bg-green-100 text-green-700 text-sm font-bold rounded-full mb-8 tracking-wide uppercase">
-               Preparation Time
-             </span>
-             <div className="relative flex items-center justify-center">
-               {/* Simple Ring Progress Background */}
-               <svg className="w-64 h-64 transform -rotate-90">
-                  <circle cx="128" cy="128" r="120" stroke="#f1f5f9" strokeWidth="4" fill="transparent" />
-                  <circle 
-                    cx="128" cy="128" r="120" 
-                    stroke={timeLeft <= 3 ? "#ef4444" : "#22c55e"} 
-                    strokeWidth="4" 
-                    fill="transparent" 
-                    strokeDasharray={`${(timeLeft/15)*753} 753`}
-                    className="transition-all duration-1000 ease-linear"
-                  />
-               </svg>
-               <div className={`absolute inset-0 flex items-center justify-center text-8xl font-mono font-light tracking-tighter ${timeLeft <= 3 ? 'text-red-500' : 'text-slate-800'}`}>
-                 {timeLeft}
-               </div>
-             </div>
-             <p className="text-gray-400 text-sm mt-8 animate-pulse">Think about your main argument...</p>
-           </div>
-        )}
-      </div>
-    </div>
-  );
-
-  // P3: Recording Phase
-  const renderRecording = () => (
-    <div className="flex flex-col items-center h-full w-full max-w-4xl mx-auto pt-4 animate-in fade-in duration-500">
-      
-       {/* Question Fixed Top */}
-       <div className="w-full bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-8 text-center opacity-90">
-         <h2 className="text-xl font-bold text-gray-800">
-          "{currentQuestion?.instruction || ''}"
-        </h2>
-      </div>
-      
-      <div className="flex-1 flex flex-col items-center justify-center w-full">
-        {/* Status */}
-        <div className="mb-6 flex items-center gap-2 px-4 py-1.5 bg-red-50 rounded-full border border-red-100">
-           <div className="w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse" />
-           <span className="text-red-600 font-bold text-xs tracking-wider uppercase">Recording Now</span>
-        </div>
-
-        {/* Timer */}
-        <div className="text-7xl font-mono text-slate-800 tabular-nums mb-8">
-            00:{timeLeft < 10 ? `0${timeLeft}` : timeLeft}
-        </div>
-
-        {/* Waveform Visualization */}
-        <div className="h-24 flex items-center justify-center gap-1.5 w-full max-w-lg mb-16">
-          {audioBars.map((h, i) => (
-            <div 
-              key={i} 
-              className={`w-2 rounded-full transition-all duration-100 ${isPaused ? 'bg-gray-300 h-2' : 'bg-gradient-to-t from-blue-500 to-indigo-400'}`}
-              style={{ height: isPaused ? '4px' : `${h}px` }}
-            />
-          ))}
-        </div>
-
-        {/* Controls: Restart (Left), Pause (Center), Done (Right) */}
-        <div className="flex items-center gap-12">
-           <button 
-            onClick={restartPractice}
-            className="group flex flex-col items-center gap-2 text-gray-400 hover:text-gray-600 transition-colors"
-          >
-            <div className="w-14 h-14 rounded-full border-2 border-gray-200 flex items-center justify-center group-hover:border-gray-400 bg-white">
-              <RotateCcw size={20} />
-            </div>
-            <span className="text-xs font-medium">Restart</span>
-          </button>
-
-          <button 
-            onClick={togglePause}
-            className="flex flex-col items-center gap-2 text-gray-600 hover:text-blue-600 transition-colors transform hover:scale-105 active:scale-95 duration-200"
-          >
-            <div className="w-20 h-20 rounded-full bg-white shadow-xl shadow-blue-100 border border-blue-50 flex items-center justify-center text-blue-600 ring-4 ring-blue-50">
-               {isPaused ? <Play size={36} className="ml-1.5" /> : <Pause size={36} />}
-            </div>
-            <span className="text-xs font-medium">{isPaused ? "Resume" : "Pause"}</span>
-          </button>
-
-          <button 
-            onClick={finishRecording}
-            className="group flex flex-col items-center gap-2 text-gray-400 hover:text-red-600 transition-colors"
-          >
-             <div className="w-14 h-14 rounded-full border-2 border-red-100 bg-red-50 flex items-center justify-center text-red-500 group-hover:bg-red-100 group-hover:border-red-200">
-              <Square size={18} fill="currentColor" />
-            </div>
-            <span className="text-xs font-medium">Done</span>
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-
-  // P4: Confirmation Page
-  const renderConfirmation = () => {
-    const progressPercentage = (audioProgress / audioTotalTime) * 100;
-    
-    return (
-    <div className="flex flex-col items-center justify-center h-full max-w-2xl mx-auto animate-in zoom-in-95 duration-300">
-      <div className="bg-white rounded-3xl p-10 shadow-xl border border-gray-100 w-full text-center">
-        <div className="w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-6 shadow-sm">
-          <CheckCircle2 size={40} />
-        </div>
-        <h2 className="text-3xl font-bold text-gray-900 mb-3">Recording Complete!</h2>
-        <p className="text-gray-500 mb-10 text-lg">Good effort. Listen to your response or submit for scoring.</p>
-
-        {/* Interactive Audio Player */}
-        <div className="bg-gray-50 rounded-2xl p-6 mb-10 flex items-center gap-4 border border-gray-200">
-           <button 
-             onClick={toggleAudioPlay}
-             className="w-12 h-12 bg-white rounded-full shadow-sm border border-gray-100 flex items-center justify-center text-gray-700 hover:text-blue-600 hover:scale-105 transition-all"
-           >
-             {isPlaying ? <Pause size={20} /> : <Play size={20} fill="currentColor" className="ml-1" />}
-           </button>
-           <div className="flex-1">
-             <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden mb-2">
-               <div 
-                 className="h-full bg-blue-500 rounded-full transition-all duration-100" 
-                 style={{ width: `${progressPercentage}%` }}
-               ></div>
-             </div>
-             <div className="flex justify-between text-xs font-mono text-gray-400">
-               <span>{formatTime(audioProgress)}</span>
-               <span>{formatTime(audioTotalTime)}</span>
-             </div>
-           </div>
-        </div>
-
-        <div className="flex flex-col gap-4">
-           {/* Primary Action */}
-          <button 
-            onClick={submitForAnalysis}
-            className="w-full py-4 rounded-xl bg-blue-600 text-white font-bold text-lg hover:bg-blue-700 shadow-lg shadow-blue-200 transition-all transform hover:-translate-y-0.5"
-          >
-            Submit for AI Analysis
-          </button>
-
-          {/* Secondary Action */}
-          <button 
-            onClick={restartPractice}
-            className="w-full py-4 rounded-xl border border-gray-200 text-gray-500 font-semibold hover:bg-gray-50 hover:text-gray-800 transition-colors"
-          >
-            Retry / 重录 (Discard)
-          </button>
-        </div>
-      </div>
-    </div>
-  )};
-
-  // P4.5: Analyzing Page
-  const renderAnalyzing = () => (
-    <div className="flex flex-col items-center justify-center h-full max-w-2xl mx-auto animate-in zoom-in-95 duration-300">
-      <div className="bg-white rounded-3xl p-10 shadow-xl border border-gray-100 w-full">
-        <div className="w-20 h-20 bg-gradient-to-br from-blue-500 to-indigo-600 text-white rounded-full flex items-center justify-center mx-auto mb-6 shadow-lg animate-pulse">
-          <Sparkles size={40} />
-        </div>
-        <h2 className="text-3xl font-bold text-gray-900 mb-3 text-center">AI is Analyzing...</h2>
-        <p className="text-gray-500 mb-10 text-lg text-center">Our advanced AI is processing your response. This usually takes 8-10 seconds.</p>
-
-        {/* Analysis Progress */}
-        <div className="space-y-4">
-          {analysisSteps.map((step, index) => (
-            <div 
-              key={step.id} 
-              className={`flex items-center gap-4 p-4 rounded-xl transition-all duration-300 ${
-                step.status === 'completed' 
-                  ? 'bg-green-50 border border-green-100' 
-                  : step.status === 'processing'
-                    ? 'bg-blue-50 border border-blue-100 scale-105'
-                    : 'bg-gray-50 border border-gray-100'
-              }`}
-            >
-              <div className="flex items-center justify-center w-8 h-8 shrink-0">
-                {step.status === 'completed' && (
-                  <CheckCircle2 size={24} className="text-green-600" />
-                )}
-                {step.status === 'processing' && (
-                  <div className="w-5 h-5 border-3 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                )}
-                {step.status === 'pending' && (
-                  <div className="w-5 h-5 rounded-full border-2 border-gray-300"></div>
-                )}
-              </div>
-              <div className="flex-1">
-                <span className={`font-semibold ${
-                  step.status === 'completed' 
-                    ? 'text-green-700' 
-                    : step.status === 'processing'
-                      ? 'text-blue-700'
-                      : 'text-gray-400'
-                }`}>
-                  {step.label}
-                </span>
-                {step.status === 'processing' && (
-                  <div className="mt-1 h-1 bg-blue-100 rounded-full overflow-hidden">
-                    <div className="h-full bg-blue-600 rounded-full animate-pulse" style={{ width: '60%' }}></div>
-                  </div>
-                )}
-              </div>
-              {step.status === 'completed' && (
-                <span className="text-xs text-green-600 font-medium">✓ Done</span>
-              )}
-              {step.status === 'processing' && (
-                <span className="text-xs text-blue-600 font-medium animate-pulse">Processing...</span>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-
-  // P5: AI Report Page
-  // Helper Component: Sentence Card
-  const SentenceCard = ({ sentence, index }: { sentence: any; index: number }) => {
-    const isGood = sentence.evaluation.includes('优秀');
-    const isExpanded = expandedSentenceId === index;
-    
-    return (
-      <div className={`group transition-all ${isExpanded ? 'bg-blue-50/30' : 'hover:bg-gray-50'}`}>
-        <div className="p-5 cursor-pointer" onClick={() => setExpandedSentenceId(isExpanded ? null : index)}>
-          <div className="flex items-start gap-4">
-            {/* Icon */}
-            <div className="mt-1.5 shrink-0">
-              {isGood ? 
-                <CheckCircle2 size={18} className="text-green-500" /> : 
-                <Zap size={18} className="text-blue-500" />
-              }
-            </div>
-            
-            {/* Original Text */}
-            <div className="flex-1">
-              <p className="text-lg leading-relaxed text-gray-800 font-medium">
-                {sentence.original_text}
-              </p>
-              
-              {/* Expandable Feedback */}
-              {isExpanded && (
-                <div className="mt-4 animate-in fade-in duration-300">
-                  {sentence.native_version && (
-                    <div className="bg-white rounded-xl border border-blue-100 p-5 shadow-sm mb-3">
-                      <div className="flex items-start gap-4 mb-3">
-                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white shrink-0">
-                          <Star size={14} fill="currentColor" />
-                        </div>
-                        <div className="flex-1">
-                          <div className="text-xs font-bold text-blue-600 uppercase mb-1">
-                            Native Speaker Version
-                          </div>
-                          <p className="text-gray-900 text-lg font-serif leading-relaxed">
-                            {sentence.native_version}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                  
-                  {/* Feedback Details */}
-                  <div className="space-y-3 pl-12">
-                    <div>
-                      <div className="text-xs font-bold text-blue-600 mb-1">语法：</div>
-                      <div className="text-sm text-gray-700">{sentence.grammar_feedback}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs font-bold text-green-600 mb-1">表达：</div>
-                      <div className="text-sm text-gray-700">{sentence.expression_feedback}</div>
-                    </div>
-                    <div className="bg-indigo-50 p-3 rounded-lg">
-                      <div className="text-xs font-bold text-indigo-600 mb-1 flex items-center gap-1">
-                        <Star size={12} className="fill-indigo-200" />
-                        建议：
-                      </div>
-                      <div className="text-sm text-indigo-700">{sentence.suggestion_feedback}</div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-            
-            {/* Chevron */}
-            <ChevronDown 
-              size={20} 
-              className={`transition-transform ${isExpanded ? 'rotate-180' : ''} text-gray-300`}
-            />
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  const renderReport = () => {
-    if (!analysisReport?.report_json) {
-      return (
-        <div className="flex items-center justify-center h-full">
-          <div className="text-center">
-            <AlertCircle size={48} className="text-amber-500 mx-auto mb-4" />
-            <h3 className="text-xl font-bold text-gray-900 mb-2">No Report Available</h3>
-            <p className="text-gray-600 mb-4">The analysis report could not be loaded.</p>
-            <button 
-              onClick={backToHome}
-              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-            >
-              Back to Home
-            </button>
-          </div>
-        </div>
-      );
-    }
-    
-    const report = analysisReport.report_json;
-    
-    return (
-      <div className="w-full max-w-5xl mx-auto h-full overflow-y-auto pb-24">
-        {/* Score Card + Summary Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-          
-          {/* Score Card */}
-          <div className="bg-white p-6 rounded-2xl shadow-sm border lg:col-span-1">
-            <div className="text-gray-400 text-xs font-bold uppercase mb-6">ETS Estimated Score</div>
-            <div className="relative mb-6 flex justify-center">
-              <svg className="w-36 h-36 transform -rotate-90">
-                <circle cx="72" cy="72" r="64" stroke="#f1f5f9" strokeWidth="8" fill="transparent" />
-                <circle 
-                  cx="72" cy="72" r="64" 
-                  stroke="#3b82f6" 
-                  strokeWidth="8" 
-                  fill="transparent"
-                  strokeDasharray={`${(report.total_score/30)*402} 402`}
-                  strokeLinecap="round"
-                />
-              </svg>
-              <div className="absolute inset-0 flex flex-col items-center justify-center">
-                <span className="text-5xl font-bold text-gray-900">{report.total_score}</span>
-                <span className="text-xs text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded mt-1 uppercase">
-                  {report.level}
-                </span>
-              </div>
-            </div>
-            
-            {/* Component Scores */}
-            <div className="flex justify-between gap-2 text-center text-xs">
-              <div className="flex-1 bg-gray-50 py-2 rounded-lg border">
-                <div className="text-gray-400 text-[10px]">Delivery</div>
-                <div className="font-bold text-blue-600">{report.delivery_score}/10</div>
-              </div>
-              <div className="flex-1 bg-gray-50 py-2 rounded-lg border">
-                <div className="text-gray-400 text-[10px]">Language</div>
-                <div className="font-bold text-green-600">{report.language_score}/10</div>
-              </div>
-              <div className="flex-1 bg-gray-50 py-2 rounded-lg border">
-                <div className="text-gray-400 text-[10px]">Topic</div>
-                <div className="font-bold text-purple-600">{report.topic_score}/10</div>
-              </div>
-            </div>
-          </div>
-          
-          {/* AI Summary - Gradient Card */}
-          <div className="bg-gradient-to-br from-indigo-600 to-blue-700 p-8 rounded-2xl shadow-lg text-white lg:col-span-2">
-            <div className="flex items-start gap-5">
-              <div className="p-3 bg-white/10 rounded-xl backdrop-blur-md border border-white/10">
-                <Sparkles className="text-yellow-300" fill="currentColor" size={24} />
-              </div>
-              <div>
-                <h3 className="text-xs font-bold text-blue-200 uppercase tracking-widest mb-3">AI Summary</h3>
-                <p className="text-white font-medium leading-relaxed text-xl">
-                  {report.overall_summary}
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-        
-        {/* Interactive Sentence Analysis */}
-        <div className="bg-white rounded-2xl shadow-sm border mb-8">
-          <div className="p-6 border-b bg-gray-50/50">
-            <h3 className="font-bold text-gray-800 text-lg">📝 逐句分析</h3>
-            <p className="text-sm text-gray-500 mt-1">点击句子展开详细反馈</p>
-          </div>
-          
-          <div className="divide-y">
-            {report.sentence_analyses.map((sentence: any, idx: number) => (
-              <SentenceCard 
-                key={idx} 
-                sentence={sentence} 
-                index={idx}
-              />
-            ))}
-          </div>
-        </div>
-        
-        {/* Actionable Tips */}
-        <div className="bg-blue-50 rounded-2xl p-6 border border-blue-100 mb-8">
-          <h3 className="text-lg font-bold text-blue-900 mb-4 flex items-center gap-2">
-            <Star className="text-blue-600" size={20} />
-            🎯 行动建议
-          </h3>
-          <ul className="space-y-3">
-            {report.actionable_tips.map((tip: string, i: number) => (
-              <li key={i} className="flex gap-3">
-                <span className="text-blue-600 font-bold">{i + 1}.</span>
-                <span className="text-gray-700">{tip}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-        
-        {/* Practice Again Button */}
-        <div className="fixed bottom-6 left-0 right-0 flex justify-center pointer-events-none z-20">
-          <button 
-            onClick={backToHome}
-            className="pointer-events-auto flex items-center gap-2 px-8 py-3 bg-gray-900 hover:bg-black text-white rounded-xl font-bold shadow-lg"
-          >
-            <RefreshCcw size={18} />
-            Practice Again
-          </button>
-        </div>
-      </div>
-    );
-  };
-
-  // Side Navigation (Unchanged)
-  const Sidebar = () => (
-    <div className="w-20 bg-gray-900 flex flex-col items-center py-8 z-30 h-screen fixed left-0 top-0 border-r border-gray-800">
-      <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center mb-10 shadow-lg shadow-blue-500/30">
-        <span className="text-white font-bold text-xl">T</span>
-      </div>
-      <nav className="flex-1 flex flex-col gap-6 w-full px-2">
-        <NavItem icon={<Home size={20} />} disabled />
-        <NavItem icon={<BookOpen size={20} />} active />
-        <NavItem icon={<BarChart2 size={20} />} disabled />
-      </nav>
-      <div className="mt-auto pb-4">
-        <div className="w-10 h-10 rounded-full bg-gray-800 flex items-center justify-center text-gray-400 hover:text-white transition-colors cursor-pointer">
-           <User size={20} />
-        </div>
-      </div>
-    </div>
-  );
-
-  const NavItem = ({ icon, active, disabled }: { icon: React.ReactNode; active?: boolean; disabled?: boolean }) => (
-    <button 
-      disabled={disabled}
-      className={`w-full aspect-square rounded-xl flex items-center justify-center transition-all duration-200 ${
-        disabled 
-          ? 'bg-gray-800/30 text-gray-600 cursor-not-allowed opacity-40' 
-          : active 
-            ? 'bg-gray-800 text-blue-400 border border-gray-700' 
-            : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
-      }`}
-    >
-      {icon}
-    </button>
-  );
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-slate-800 font-sans pl-20 relative">
@@ -1014,7 +759,6 @@ const App = () => {
         <div className="flex items-center gap-1.5">
            {['Detail', 'Prep', 'Record', 'Result'].map((s, i) => {
              const stepIdx = ['detail', 'prep_tts', 'prep_countdown', 'recording', 'confirmation', 'analyzing', 'report'].indexOf(currentStep);
-             // Normalize step index for visual 4-step progress
              let visualIdx = 0;
              if (stepIdx >= 1) visualIdx = 1;
              if (stepIdx >= 3) visualIdx = 2;
@@ -1049,12 +793,7 @@ const App = () => {
       {/* Main Content */}
       <main className="flex flex-col h-[calc(100vh-64px)] overflow-hidden relative">
         <div className="flex-1 flex flex-col p-4 md:p-8 overflow-y-auto w-full mx-auto">
-          {currentStep === 'detail' && renderDetail()}
-          {(currentStep === 'prep_tts' || currentStep === 'prep_countdown') && renderPrep()}
-          {currentStep === 'recording' && renderRecording()}
-          {currentStep === 'confirmation' && renderConfirmation()}
-          {currentStep === 'analyzing' && renderAnalyzing()}
-          {currentStep === 'report' && renderReport()}
+          {renderCurrentPage()}
         </div>
       </main>
     </div>

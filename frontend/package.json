@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "dev": "vite"
+    "dev": "vite",
+    "dev:ui": "VITE_DEV_SKIP_MIC=true vite --port 5174"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",

@@ -72,55 +72,55 @@ async def create_analysis(
     )
 
 
-@router.get("/{task_id}", response_model=AnalysisResponse)
-async def get_analysis(
-    task_id: int,
-    db: AsyncSession = Depends(get_db)
-):
-    """Get analysis result by task ID."""
-    result = await db.execute(
-        select(AnalysisResult).where(AnalysisResult.id == task_id)
-    )
-    analysis = result.scalar_one_or_none()
+# @router.get("/{task_id}", response_model=AnalysisResponse)
+# async def get_analysis(
+#     task_id: int,
+#     db: AsyncSession = Depends(get_db)
+# ):
+#     """Get analysis result by task ID."""
+#     result = await db.execute(
+#         select(AnalysisResult).where(AnalysisResult.id == task_id)
+#     )
+#     analysis = result.scalar_one_or_none()
     
-    if not analysis:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Analysis task {task_id} not found"
-        )
+#     if not analysis:
+#         raise HTTPException(
+#             status_code=status.HTTP_404_NOT_FOUND,
+#             detail=f"Analysis task {task_id} not found"
+#         )
     
-    return AnalysisResponse(
-        task_id=analysis.id,
-        status=analysis.status,
-        report_markdown=None,  # Deprecated, always None
-        report_json=analysis.report_json,
-        error_message=analysis.error_message,
-        created_at=analysis.created_at
-    )
+#     return AnalysisResponse(
+#         task_id=analysis.id,
+#         status=analysis.status,
+#         report_markdown=None,  # Deprecated, always None
+#         report_json=analysis.report_json,
+#         error_message=analysis.error_message,
+#         created_at=analysis.created_at
+#     )
 
 
-@router.get("/recording/{recording_id}", response_model=AnalysisResponse)
-async def get_analysis_by_recording(
-    recording_id: int,
-    db: AsyncSession = Depends(get_db)
-):
-    """Get analysis result by recording ID."""
-    result = await db.execute(
-        select(AnalysisResult).where(AnalysisResult.recording_id == recording_id)
-    )
-    analysis = result.scalar_one_or_none()
+# @router.get("/recording/{recording_id}", response_model=AnalysisResponse)
+# async def get_analysis_by_recording(
+#     recording_id: int,
+#     db: AsyncSession = Depends(get_db)
+# ):
+#     """Get analysis result by recording ID."""
+#     result = await db.execute(
+#         select(AnalysisResult).where(AnalysisResult.recording_id == recording_id)
+#     )
+#     analysis = result.scalar_one_or_none()
     
-    if not analysis:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Analysis for recording {recording_id} not found"
-        )
+#     if not analysis:
+#         raise HTTPException(
+#             status_code=status.HTTP_404_NOT_FOUND,
+#             detail=f"Analysis for recording {recording_id} not found"
+#         )
     
-    return AnalysisResponse(
-        task_id=analysis.id,
-        status=analysis.status,
-        report_markdown=None,  # Deprecated, always None
-        report_json=analysis.report_json,
-        error_message=analysis.error_message,
-        created_at=analysis.created_at
-    )
+#     return AnalysisResponse(
+#         task_id=analysis.id,
+#         status=analysis.status,
+#         report_markdown=None,  # Deprecated, always None
+#         report_json=analysis.report_json,
+#         error_message=analysis.error_message,
+#         created_at=analysis.created_at
+#     )

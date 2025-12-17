@@ -1,4 +1,6 @@
 services:
+  # ==================== Infrastructure ====================
+  
   minio:
     image: minio/minio:latest
     container_name: toefl-minio
@@ -9,7 +11,7 @@ services:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin123
     volumes:
-      - minio_data:/data
+      - ./data/minio:/data
     command: server /data --console-address ":9001"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
@@ -34,6 +36,3 @@ services:
       timeout: 5s
       retries: 5
 
-volumes:
-  minio_data:
-    driver: local

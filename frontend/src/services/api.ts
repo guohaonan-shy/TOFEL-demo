@@ -80,6 +80,20 @@ export async function fetchQuestions(): Promise<QuestionsResponse> {
 }
 
 /**
+ * Fetch a specific question by ID
+ * @param questionId - The ID of the question to fetch
+ */
+export async function fetchQuestion(questionId: string): Promise<Question> {
+  const response = await fetch(`${API_BASE_URL}/questions/${questionId}`);
+  
+  if (!response.ok) {
+    throw new Error(`Failed to fetch question: ${response.statusText}`);
+  }
+  
+  return response.json();
+}
+
+/**
  * Upload a recording to the backend
  * @param audioBlob - The recorded audio as a Blob
  * @param questionId - The ID of the question being answered

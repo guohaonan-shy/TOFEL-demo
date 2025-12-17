@@ -9,23 +9,26 @@ export interface AudioRecorderState {
 }
 
 export interface AudioRecorderControls {
+  warmup: () => Promise<void>;  // Pre-initialize microphone for faster start
   startRecording: () => Promise<void>;
   stopRecording: () => void;
   pauseRecording: () => void;
   resumeRecording: () => void;
   clearRecording: () => void;
+  isWarmedUp: boolean;
 }
 
 /**
  * Hook for recording audio from the user's microphone
  * Provides real-time audio level for waveform visualization
  */
-export function useAudioRecorder(): AudioRecorderState & AudioRecorderControls {
+export function useAudioRecorder(): AudioRecorderState & AudioRecorderControls & { isWarmedUp: boolean } {
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [audioLevel, setAudioLevel] = useState(0);
+  const [isWarmedUp, setIsWarmedUp] = useState(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -33,13 +36,26 @@ export function useAudioRecorder(): AudioRecorderState & AudioRecorderControls {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const warmedUpStreamRef = useRef<MediaStream | null>(null);
 
   /**
    * Update audio level for visualization
+   * Uses a ref to track pause state to avoid stale closure issues
    */
+  const isPausedRef = useRef(false);
+  
+  // Keep ref in sync with state
+  isPausedRef.current = isPaused;
+
   const updateAudioLevel = useCallback(() => {
-    if (!analyserRef.current || isPaused) {
+    if (!analyserRef.current) {
+      animationFrameRef.current = requestAnimationFrame(updateAudioLevel);
+      return;
+    }
+    
+    if (isPausedRef.current) {
       setAudioLevel(0);
+      animationFrameRef.current = requestAnimationFrame(updateAudioLevel);
       return;
     }
 
@@ -54,7 +70,35 @@ export function useAudioRecorder(): AudioRecorderState & AudioRecorderControls {
 
     // Continue animation loop
     animationFrameRef.current = requestAnimationFrame(updateAudioLevel);
-  }, [isPaused]);
+  }, []);
+
+  /**
+   * Pre-initialize microphone stream for faster recording start
+   * Call this during countdown to avoid delay when recording starts
+   */
+  const warmup = useCallback(async () => {
+    // Already warmed up
+    if (warmedUpStreamRef.current) {
+      return;
+    }
+    
+    try {
+      console.log('Warming up microphone...');
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        } 
+      });
+      warmedUpStreamRef.current = stream;
+      setIsWarmedUp(true);
+      console.log('Microphone warmed up and ready');
+    } catch (err) {
+      console.error('Failed to warmup microphone:', err);
+      // Don't set error state here, let startRecording handle it
+    }
+  }, []);
 
   /**
    * Start recording audio
@@ -64,24 +108,59 @@ export function useAudioRecorder(): AudioRecorderState & AudioRecorderControls {
       setError(null);
       audioChunksRef.current = [];
 
-      // Request microphone access
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Use pre-warmed stream if available, otherwise request new one
+      let stream: MediaStream;
+      if (warmedUpStreamRef.current) {
+        console.log('Using pre-warmed microphone stream');
+        stream = warmedUpStreamRef.current;
+        warmedUpStreamRef.current = null; // Clear after use
+        setIsWarmedUp(false);
+      } else {
+        console.log('Requesting new microphone stream...');
+        stream = await navigator.mediaDevices.getUserMedia({ 
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          } 
+        });
+      }
       streamRef.current = stream;
 
       // Set up Web Audio API for waveform visualization
-      const audioContext = new AudioContext();
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      
+      // Resume AudioContext if suspended (required by browser autoplay policy)
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+      }
+      
       const source = audioContext.createMediaStreamSource(stream);
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.3; // Faster response
       source.connect(analyser);
 
       audioContextRef.current = audioContext;
       analyserRef.current = analyser;
 
+      // Determine supported mimeType
+      let mimeType = 'audio/webm';
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = 'audio/mp4';
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+          mimeType = 'audio/ogg';
+          if (!MediaRecorder.isTypeSupported(mimeType)) {
+            mimeType = ''; // Let browser decide
+          }
+        }
+      }
+
       // Set up MediaRecorder
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: 'audio/webm',
-      });
+      const mediaRecorderOptions: MediaRecorderOptions = mimeType 
+        ? { mimeType } 
+        : {};
+      const mediaRecorder = new MediaRecorder(stream, mediaRecorderOptions);
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
@@ -90,24 +169,30 @@ export function useAudioRecorder(): AudioRecorderState & AudioRecorderControls {
       };
 
       mediaRecorder.onstop = () => {
-        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const blob = new Blob(audioChunksRef.current, { 
+          type: mediaRecorder.mimeType || 'audio/webm' 
+        });
         setAudioBlob(blob);
         setIsRecording(false);
 
-        // Clean up
+        // Clean up animation
         if (animationFrameRef.current) {
           cancelAnimationFrame(animationFrameRef.current);
+          animationFrameRef.current = null;
         }
-        if (audioContextRef.current) {
+        // Close audio context
+        if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
           audioContextRef.current.close();
         }
+        // Stop stream tracks
         if (streamRef.current) {
           streamRef.current.getTracks().forEach((track) => track.stop());
         }
       };
 
       mediaRecorderRef.current = mediaRecorder;
-      mediaRecorder.start();
+      // Request data every 100ms for smoother recording
+      mediaRecorder.start(100);
       setIsRecording(true);
 
       // Start audio level monitoring
@@ -147,9 +232,9 @@ export function useAudioRecorder(): AudioRecorderState & AudioRecorderControls {
     if (mediaRecorderRef.current && isPaused) {
       mediaRecorderRef.current.resume();
       setIsPaused(false);
-      updateAudioLevel();
+      // Animation loop is already running, isPausedRef will be updated
     }
-  }, [isPaused, updateAudioLevel]);
+  }, [isPaused]);
 
   /**
    * Clear the recorded audio
@@ -165,6 +250,8 @@ export function useAudioRecorder(): AudioRecorderState & AudioRecorderControls {
     audioBlob,
     error,
     audioLevel,
+    isWarmedUp,
+    warmup,
     startRecording,
     stopRecording,
     pauseRecording,
