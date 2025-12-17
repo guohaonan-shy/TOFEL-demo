@@ -58,18 +58,18 @@ async def get_question(
             detail=f"Question {question_id} not found"
         )
     
-    # Generate presigned URL for audio if available
-    audio_presigned_url = None
-    if question.audio_url:
-        if question.audio_url.startswith("http"):
-            # Already a full URL (external storage)
-            audio_presigned_url = question.audio_url
-        else:
-            # Generate presigned URL from MinIO
-            audio_presigned_url = storage_service.get_presigned_url(
-                bucket=storage_service.bucket_questions,
-                object_key=question.audio_url
+    # Generate presigned URL from MinIO
+    try:
+        audio_presigned_url = storage_service.get_presigned_url(
+            bucket=storage_service.bucket_questions,
+            object_key=question.audio_url
             )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate presigned URL: {e}"
+        )
+            
     
     return QuestionResponse(
         question_id=question.question_id,
