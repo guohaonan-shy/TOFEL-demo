@@ -1,323 +1,317 @@
 # TOEFL Speaking Practice Application
 
-An AI-powered TOEFL Speaking practice platform that provides real-time feedback and detailed analysis of your speaking performance.
+AI驱动的托福口语练习平台，提供基于内容分块的智能反馈和发音分析。
 
 ![TOEFL Speaking Practice](https://img.shields.io/badge/TOEFL-Speaking%20Practice-blue)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-green)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.124%2B-teal)
 ![React](https://img.shields.io/badge/React-18-blue)
-![TypeScript](https://img.shields.io/badge/TypeScript-5-blue)
 
-## ✨ Features
+## ✨ 核心功能
 
-### 🎤 Real-time Recording
-- Browser-based audio recording using Web Audio API
-- Visual feedback with waveform animation
-- Pause/resume functionality
-- 45-second recording timer
+- 🎤 **浏览器录音** - 45秒录音，支持暂停/恢复
+- 🤖 **智能分析** - OpenAI Whisper转录 + GPT-4o音频分析
+- 📊 **逐段反馈** - 自动识别开头语和观点，提供针对性建议
+- 🔊 **音频分块播放** - 每段内容独立音频，可单独播放
+- 📈 **ETS评分** - 基于Delivery、Language Use、Topic Development三维度评分(0-30分)
 
-### 🤖 AI-Powered Analysis
-- **Speech-to-Text**: OpenAI Whisper for accurate transcription with timestamps
-- **Intelligent Scoring**: GPT-4o analyzes delivery, language use, and topic development
-- **Structured Feedback**: Sentence-by-sentence analysis with grammar, expression, and improvement suggestions
-- **Native Speaker Rewrites**: See how native speakers would phrase your sentences
+## 🚀 快速启动
 
-### 📊 Comprehensive Reports
-- **Overall Score**: 0-30 scale with performance level (Excellent/Good/Fair/Weak)
-- **Component Breakdown**: Delivery, Language Use, and Topic Development scores
-- **Interactive UI**: Expandable sentence cards with detailed feedback
-- **Actionable Tips**: Specific recommendations for improvement
+### 前置要求
 
-### 🎯 Practice Questions
-- Pre-loaded TOEFL-style independent speaking questions
-- SOS (Save Our Students) keywords and starter phrases
-- Question audio playback
-
-## 🏗️ Architecture
-
-### Tech Stack
-
-**Backend:**
-- FastAPI (Python 3.10+)
-- PostgreSQL (database)
-- MinIO (S3-compatible object storage)
-- OpenAI API (Whisper + GPT-4o)
-- SQLAlchemy (ORM)
-- Pydantic (data validation)
-
-**Frontend:**
-- React 18
-- TypeScript
-- Vite (build tool)
-- Tailwind CSS
-- Lucide React (icons)
-
-**Infrastructure:**
-- Docker & Docker Compose
-- Uvicorn (ASGI server)
-
-### System Flow
-
-```
-┌─────────────┐
-│   Browser   │
-│  (Frontend) │
-└──────┬──────┘
-       │
-       │ 1. Fetch Questions
-       ▼
-┌─────────────────┐
-│  FastAPI Server │
-│    (Backend)    │
-└────────┬────────┘
-         │
-         │ 2. Upload Audio
-         ▼
-    ┌────────┐
-    │ MinIO  │
-    │Storage │
-    └────────┘
-         │
-         │ 3. Trigger Analysis (Background Task)
-         ▼
-    ┌──────────────┐
-    │ OpenAI APIs  │
-    │              │
-    │ • Whisper    │ ──► Transcription
-    │ • GPT-4o     │ ──► Analysis
-    └──────────────┘
-         │
-         │ 4. Save Results
-         ▼
-    ┌──────────────┐
-    │ PostgreSQL   │
-    │   Database   │
-    └──────────────┘
-         │
-         │ 5. Poll & Retrieve
-         ▼
-    ┌─────────────┐
-    │   Frontend  │
-    │ (Report UI) │
-    └─────────────┘
-```
-
-## 🚀 Getting Started
-
-### Prerequisites
-
-- Python 3.10 or higher
-- Node.js 18 or higher
+- Python 3.10+ 
+- Node.js 18+
 - Docker & Docker Compose
 - OpenAI API Key
+- ffmpeg (用于音频处理)
 
-### Installation
-
-See [SETUP.md](./SETUP.md) for detailed installation instructions.
-
-**Quick Start:**
+### 1. 启动 Docker 服务
 
 ```bash
-# 1. Start Docker services
 cd backend
 docker-compose up -d
 
-# 2. Setup backend
-python3.10 -m venv .venv
+# 验证服务运行
+docker ps
+# 应该看到: toefl-postgres, toefl-minio
+```
+
+### 2. 安装 ffmpeg
+
+```bash
+# macOS
+brew install ffmpeg
+
+# Ubuntu/Debian
+sudo apt-get install ffmpeg
+
+# 验证安装
+ffmpeg -version
+```
+
+### 3. 配置后端
+
+```bash
+cd backend
+
+# 创建虚拟环境
+python3 -m venv .venv
 source .venv/bin/activate
+
+# 安装依赖
 pip install uv
 uv pip install -e .
 
-# 3. Configure .env file with your OpenAI API key
-echo "OPENAI_API_KEY=your_key_here" >> .env
-
-# 4. Run migrations
-for file in migrations/postgres/*.sql; do
-  psql postgresql://toefl:toefl123@localhost:5432/toefl_speaking -f "$file"
-done
-
-# 5. Start backend
-uvicorn app.app:app --reload
-
-# 6. In a new terminal, setup frontend
-cd ../frontend
-npm install
-npm run dev
+# 配置环境变量
+cat > .env << EOF
+DATABASE_URL=postgresql+asyncpg://toefl:toefl123@localhost:5432/toefl_speaking
+MINIO_ENDPOINT=localhost:9000
+MINIO_ACCESS_KEY=minioadmin
+MINIO_SECRET_KEY=minioadmin123
+MINIO_SECURE=false
+OPENAI_API_KEY=sk-your-key-here
+EOF
 ```
 
-Visit http://localhost:5173 to use the application!
+### 4. 启动后端
 
-## 📁 Project Structure
+```bash
+# 在 backend/ 目录下，虚拟环境已激活
+python main.py
+
+# 后端运行在: http://localhost:8000
+# API 文档: http://localhost:8000/docs
+```
+
+### 5. 启动前端
+
+```bash
+# 打开新终端
+cd frontend
+
+# 安装依赖（首次运行）
+npm install
+
+# 启动开发服务器
+npm run dev
+
+# 前端运行在: http://localhost:5173
+```
+
+### 6. 访问应用
+
+打开浏览器访问: **http://localhost:5173**
+
+## 📊 V2 版本新特性
+
+### 内容感知分块分析
+- ✅ **智能分块**: LLM自动识别开头语、观点1、观点2
+- ✅ **音频分段**: 每个段落独立音频文件，可单独播放
+- ✅ **并行处理**: Whisper + GPT-4o音频同时运行，更快
+- ✅ **Python计算评分**: 确保总分和等级计算准确
+
+### 分析流程
+```
+1. Whisper转录 → 获取文本和时间戳
+2. LLM内容分块 → 识别2-4个语义段落
+3. pydub音频切分 → 创建可播放的音频段
+4. 并行音频分析 → 全局+各段落同时分析
+5. Python计算评分 → total_score和level
+6. 前端展示 → 逐段分析+音频播放
+```
+
+## 🏗️ 技术架构
+
+**后端:**
+- FastAPI + SQLAlchemy (异步ORM)
+- PostgreSQL (数据库)
+- MinIO (对象存储)
+- OpenAI Whisper (转录)
+- GPT-4o Audio Preview (发音分析)
+- pydub + ffmpeg (音频处理)
+
+**前端:**
+- React 18 + TypeScript
+- Vite (构建工具)
+- Tailwind CSS
+- Lucide React (图标)
+
+## 📁 项目结构
 
 ```
 TOFEL-demo/
 ├── backend/
 │   ├── app/
-│   │   ├── models/           # Database models
-│   │   │   ├── question.py
-│   │   │   ├── recording.py
-│   │   │   └── analysis.py
-│   │   ├── routers/          # API endpoints
-│   │   │   ├── questions.py
-│   │   │   ├── recordings.py
-│   │   │   └── analysis.py
-│   │   ├── schemas/          # Pydantic schemas
-│   │   ├── services/         # Business logic
-│   │   │   ├── ai/
-│   │   │   │   ├── asr.py   # Speech-to-text
-│   │   │   │   └── llm.py   # LLM analysis
-│   │   │   ├── storage_service.py
-│   │   │   └── analysis_service.py
-│   │   ├── config.py         # Settings
-│   │   ├── database.py       # DB connection
-│   │   └── app.py           # FastAPI app
-│   ├── migrations/           # SQL migrations
-│   ├── docker-compose.yml    # Docker services
-│   └── pyproject.toml        # Dependencies
+│   │   ├── services/ai/
+│   │   │   ├── asr.py          # Whisper + 音频切分
+│   │   │   └── llm.py          # GPT-4o分析
+│   │   ├── services/
+│   │   │   ├── analysis_service.py  # 主工作流
+│   │   │   └── storage_service.py   # MinIO操作
+│   │   └── routers/            # API端点
+│   ├── migrations/             # 数据库迁移
+│   └── docker-compose.yml      # PostgreSQL + MinIO
 │
 ├── frontend/
-│   ├── src/
-│   │   ├── app/
-│   │   │   └── App.tsx      # Main component
-│   │   ├── hooks/
-│   │   │   └── useAudioRecorder.ts
-│   │   ├── services/
-│   │   │   └── api.ts       # API client
-│   │   └── main.tsx
-│   ├── package.json
-│   └── vite.config.ts
+│   └── src/
+│       ├── app/App.tsx         # 主组件
+│       └── services/api.ts     # API客户端
 │
-├── SETUP.md                  # Setup instructions
-├── README.md                 # This file
-└── .gitignore
+└── README.md
 ```
 
-## 🔧 Configuration
+## 🔧 配置说明
 
-### Backend Environment Variables
-
-Create `backend/.env`:
+### 后端环境变量 (`backend/.env`)
 
 ```env
-# Database
+# OpenAI API (必需)
+OPENAI_API_KEY=sk-xxxxx
+
+# 数据库
 DATABASE_URL=postgresql+asyncpg://toefl:toefl123@localhost:5432/toefl_speaking
 
-# MinIO
+# MinIO对象存储
 MINIO_ENDPOINT=localhost:9000
 MINIO_ACCESS_KEY=minioadmin
 MINIO_SECRET_KEY=minioadmin123
 MINIO_SECURE=false
-
-# OpenAI (Required)
-OPENAI_API_KEY=sk-...your-key-here
 ```
 
-### Frontend Environment Variables
-
-Create `frontend/.env`:
+### 前端环境变量 (`frontend/.env`)
 
 ```env
 VITE_API_BASE_URL=http://localhost:8000/api/v1
 ```
 
-## 📊 Database Schema
+## 🐛 常见问题
 
-### Tables
+### 后端启动失败
 
-**questions**
-- Question text and metadata
-- SOS keywords and starter phrases
-- Audio URLs
-
-**recordings**
-- User audio recordings
-- Links to questions
-- Storage URLs
-
-**analysis_results**
-- AI-generated feedback (JSON format)
-- Status tracking (pending/processing/completed/failed)
-- Timestamps
-
-## 🎨 UI Components
-
-### Report UI Features
-
-- **Score Card**: Circular progress indicator with total score and level badge
-- **AI Summary**: Gradient card with overall performance summary
-- **Sentence Analysis**: Interactive expandable cards showing:
-  - Original sentence
-  - Native speaker version (if applicable)
-  - Grammar feedback
-  - Expression feedback
-  - Improvement suggestions
-- **Actionable Tips**: Numbered list of specific recommendations
-
-## 🧪 Testing
-
-### Backend Testing
-
+**问题**: `ModuleNotFoundError: No module named 'uvicorn'`
 ```bash
-cd backend
+# 确保虚拟环境已激活
 source .venv/bin/activate
-
-# Test API endpoints
-curl http://localhost:8000/api/v1/questions
-curl http://localhost:8000/docs  # Swagger UI
+# 重新安装依赖
+uv pip install -e .
 ```
 
-### Frontend Testing
+**问题**: 后端反复重启
+```bash
+# 方案1: 使用更新后的 main.py (已设置 reload_dirs)
+python main.py
+
+# 方案2: 禁用自动重载
+uvicorn app.app:app --host 0.0.0.0 --port 8000
+```
+
+**问题**: `pydub` 错误或 "Decoding failed"
+```bash
+# 确保 ffmpeg 已安装
+ffmpeg -version
+# 如未安装: brew install ffmpeg (macOS)
+```
+
+### 前端启动失败
 
 ```bash
-cd frontend
+# 清除缓存重新安装
+rm -rf node_modules package-lock.json
+npm install
 npm run dev
-# Open http://localhost:5173 in browser
 ```
 
-## 🐛 Troubleshooting
+### Docker 服务问题
 
-See [SETUP.md](./SETUP.md#troubleshooting) for common issues and solutions.
+```bash
+# 重启服务
+docker-compose down
+docker-compose up -d
 
-## 🔒 Security Notes
+# 查看日志
+docker-compose logs
+```
 
-- Never commit `.env` files
-- Keep OpenAI API keys secure
-- Use environment variables for all secrets
-- Enable HTTPS in production
-- Implement rate limiting for production
+### 分析失败
 
-## 📈 Future Enhancements
+**错误**: "Invalid mp3 format"
+- 后端已自动处理 webm → mp3 转换
+- 确保 ffmpeg 已正确安装
 
-- [ ] User authentication and profiles
-- [ ] Progress tracking over time
-- [ ] More question types (integrated, academic discussion)
-- [ ] Pronunciation analysis
-- [ ] Speaking pace and fluency metrics
-- [ ] Comparison with native speaker benchmarks
-- [ ] Mobile app support
+**错误**: "Chunking failed"
+- 检查录音时长（至少10秒）
+- 查看后端日志获取详细错误信息
 
-## 🤝 Contributing
+## 📊 JSON 输出格式
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+```json
+{
+  "analysis_version": "2.0",
+  "global_evaluation": {
+    "total_score": 24,
+    "score_breakdown": {
+      "delivery": 8,
+      "language_use": 8,
+      "topic_development": 8
+    },
+    "level": "Good",
+    "overall_summary": "整体表现良好...",
+    "detailed_feedback": "详细分析..."
+  },
+  "full_transcript": {
+    "text": "完整转录文本...",
+    "segments": [{"start": 0.0, "end": 2.5, "text": "..."}]
+  },
+  "chunks": [
+    {
+      "chunk_id": 0,
+      "chunk_type": "opening_statement",
+      "time_range": [0.0, 6.7],
+      "text": "Honestly, I think...",
+      "audio_url": "https://...",
+      "feedback": "markdown格式的综合反馈"
+    }
+  ]
+}
+```
 
-## 📄 License
+## 🎯 使用流程
 
-[Your License Here]
+1. 打开 http://localhost:5173
+2. 选择托福口语题目
+3. 准备15秒 → 录音45秒
+4. 提交AI分析（需要20-40秒）
+5. 查看报告：
+   - 总分和等级
+   - 整体评价
+   - 逐段分析（2-4段）
+   - 点击音量图标播放该段音频
+   - 展开查看详细反馈
 
-## 🙏 Acknowledgments
+## 🔗 有用链接
 
-- OpenAI for Whisper and GPT-4o APIs
-- FastAPI framework
-- React and Vite communities
+- 后端API文档: http://localhost:8000/docs
+- MinIO控制台: http://localhost:9001 (minioadmin / minioadmin123)
+- PostgreSQL: localhost:5432 (toefl / toefl123)
 
-## 📞 Support
+## 📝 开发注意事项
 
-For questions or issues:
-- Open an issue on GitHub
-- Check the [SETUP.md](./SETUP.md) guide
-- Review API documentation at `/docs` endpoint
+- `.env` 文件不要提交到 Git
+- OpenAI API Key 保密
+- 录音文件存储在 MinIO `toefl-recordings` bucket
+- 音频分块存储在 `chunks/{recording_id}/` 路径
+- 评分逻辑: ≥24=Excellent, ≥18=Good, ≥14=Fair, <14=Weak
+
+## 📈 未来增强
+
+- [ ] 用户认证和个人档案
+- [ ] 历史进度追踪
+- [ ] 更多题型（综合口语、学术讨论）
+- [ ] 发音对比训练
+- [ ] 移动端支持
 
 ---
 
+**Version**: 2.0 (Content-Aware Chunking)  
+**Last Updated**: December 17, 2024  
 **Built with ❤️ for TOEFL learners worldwide**
-

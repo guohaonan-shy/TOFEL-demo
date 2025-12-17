@@ -26,30 +26,98 @@ export interface RecordingResponse {
   created_at: string;
 }
 
+// V2 Interfaces for chunk-based analysis
+export interface GlobalEvaluation {
+  total_score: number;
+  score_breakdown: {
+    delivery: number;
+    language_use: number;
+    topic_development: number;
+  };
+  level: string;
+  overall_summary: string;
+  detailed_feedback: string;
+}
+
+export interface FullTranscript {
+  text: string;
+  segments: Array<{
+    start: number;
+    end: number;
+    text: string;
+  }>;
+}
+
+export interface ChunkAnalysis {
+  chunk_id: number;
+  chunk_type: string;  // "opening_statement" | "viewpoint"
+  time_range: [number, number];
+  text: string;
+  audio_url: string;
+  feedback: string;  // Markdown text
+}
+
+export interface ReportJSONV2 {
+  analysis_version: string;
+  global_evaluation: GlobalEvaluation;
+  full_transcript: FullTranscript;
+  chunks: ChunkAnalysis[];
+}
+
+// Legacy V1 interfaces (kept for backward compatibility)
+export interface DeliveryAnalysis {
+  overall_score: number;
+  fluency_comment: string;
+  pronunciation_comment: string;
+  intonation_comment: string;
+  pace_comment: string;
+  confidence_comment: string;
+}
+
 export interface SentenceAnalysis {
   original_text: string;
-  evaluation: string;  // "✅ 优秀" | "⚡ 可改进" | "⚠️ 需修正"
-  native_version: string | null;
+  start_time: number;
+  end_time: number;
+  
+  // Text-based analysis
+  evaluation: string;  // "优秀" | "可改进" | "需修正"
   grammar_feedback: string;
   expression_feedback: string;
   suggestion_feedback: string;
-  start_time: number;
-  end_time: number;
+  native_version: string | null;
+  
+  // Audio-based analysis (NEW)
+  pronunciation_score: number;  // 0-10
+  pronunciation_feedback: string | null;
 }
 
-export interface ReportJSON {
+export interface ReportJSONV1 {
+  // Delivery (from audio)
+  delivery_analysis: DeliveryAnalysis;  // NEW: Detailed delivery analysis
   delivery_score: number;      // 0-10
-  delivery_comment: string;
+  
+  // Language (from text)
   language_score: number;       // 0-10
   language_comment: string;
+  
+  // Topic (from text)
   topic_score: number;          // 0-10
   topic_comment: string;
+  
+  // Overall
   total_score: number;          // 0-30
   level: string;                // "Excellent" | "Good" | "Fair" | "Weak"
   overall_summary: string;
+  
+  // Sentence-by-sentence
   sentence_analyses: SentenceAnalysis[];
+  
+  // Tips
   actionable_tips: string[];
 }
+
+// Union type for both versions
+export type ReportJSON = ReportJSONV2 | ReportJSONV1;
 
 export interface AnalysisStatusResponse {
   task_id: number;
@@ -61,9 +129,16 @@ export interface AnalysisResponse {
   task_id: number;
   status: string;
   report_markdown: string | null;  // Deprecated, ignore
-  report_json: ReportJSON | null;
+  report_json: ReportJSON | null;  // Can be V1 or V2
   error_message: string | null;
   created_at: string;
+}
+
+/**
+ * Helper function to check if report is V2
+ */
+export function isReportV2(report: ReportJSON): report is ReportJSONV2 {
+  return (report as ReportJSONV2).analysis_version === "2.0";
 }
 
 /**

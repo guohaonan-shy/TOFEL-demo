@@ -7,8 +7,18 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sess
 from app.config import settings
 from app.models import Recording, AnalysisResult, Question
 from app.services.storage_service import storage_service
-from app.services.ai.asr import transcribe_audio, transcribe_audio_openai
-from app.services.ai.llm import generate_report, generate_report_openai
+from app.services.ai.asr import transcribe_audio, transcribe_audio_openai, segment_audio_by_chunks
+from app.services.ai.llm import (
+    generate_report, 
+    generate_report_openai,
+    chunk_transcript_by_content,
+    analyze_full_audio,
+    analyze_chunk_audio,
+    parse_global_evaluation_to_json,
+    ToeflReportV2,
+    FullTranscript,
+    ChunkInfo
+)
 
 
 # Create a separate engine for background tasks
@@ -18,8 +28,15 @@ bg_session_factory = async_sessionmaker(bg_engine, class_=AsyncSession, expire_o
 
 async def run_analysis_task(analysis_id: int, recording_id: int):
     """
-    Background task to analyze a recording.
-
+    Optimized workflow with content-aware chunking and Python-calculated scores.
+    
+    Flow:
+    1. Whisper ASR (sequential)
+    2. Content chunking (sequential)
+    3. Audio segmentation (sequential)
+    4. All audio analysis in parallel
+    5. Parse + Python calculate
+    6. Merge and save
     """
     async with bg_session_factory() as db:
         try:
@@ -27,10 +44,10 @@ async def run_analysis_task(analysis_id: int, recording_id: int):
             await update_analysis_status(db, analysis_id, "processing")
             
             # Get recording and question info
-            result = await db.execute(
+            rec_result = await db.execute(
                 select(Recording).where(Recording.id == recording_id)
             )
-            recording = result.scalar_one_or_none()
+            recording = rec_result.scalar_one_or_none()
             
             if not recording:
                 raise Exception(f"Recording {recording_id} not found")
@@ -40,34 +57,95 @@ async def run_analysis_task(analysis_id: int, recording_id: int):
             )
             question = q_result.scalar_one_or_none()
             
-            # Get presigned URL for audio (for AI services)
+            # Get presigned URL for audio
             audio_url = storage_service.get_presigned_url(
                 bucket=storage_service.bucket_recordings,
                 object_key=recording.audio_url
             )
             
-            # --- AI Pipeline Selection ---
-            
+            # Check if using OpenAI
             if settings.OPENAI_API_KEY:
-                # ----------------------------------------
-                # OpenAI Workflow (JSON Only)
-                # ----------------------------------------
+                # ===== NEW V2 WORKFLOW: Content-Aware Chunking =====
                 
-                # Step 1: Transcribe with Whisper (get segments)
+                # STEP 1: Whisper ASR
                 transcript_data = await transcribe_audio_openai(audio_url)
                 
-                # Step 2: Analyze with GPT-4o (Structured Output + Python Logic)
+                # STEP 2: Content-Based Chunking
                 question_instruction = question.instruction if question else ""
-                final_report_obj = await generate_report_openai(
-                    transcript_data=transcript_data,
-                    question_text=question_instruction
+                chunk_structure = await chunk_transcript_by_content(
+                    transcript_data, question_instruction
                 )
                 
-                # Step 3: Save JSON report
+                # STEP 3: Audio Segmentation with pydub
+                chunk_object_keys = await segment_audio_by_chunks(
+                    audio_url, chunk_structure["chunks"], recording_id
+                )
+                
+                # STEP 4: All Audio Analysis in Parallel
+                # Create task for full audio analysis
+                full_audio_task = asyncio.create_task(
+                    analyze_full_audio(audio_url, question_instruction)
+                )
+                
+                # Create tasks for all chunk analyses
+                chunk_tasks = []
+                for i, chunk_info in enumerate(chunk_structure["chunks"]):
+                    chunk_audio_url = storage_service.get_presigned_url(
+                        bucket=storage_service.bucket_recordings,
+                        object_key=chunk_object_keys[i]
+                    )
+                    task = asyncio.create_task(
+                        analyze_chunk_audio(
+                            chunk_audio_url, 
+                            chunk_info["text"], 
+                            chunk_info["chunk_type"]
+                        )
+                    )
+                    chunk_tasks.append(task)
+                
+                # Wait for all audio analyses to complete
+                results = await asyncio.gather(full_audio_task, *chunk_tasks)
+                global_text = results[0]
+                chunk_feedbacks = results[1:]
+                
+                # STEP 5: Parse + Python Calculate
+                global_evaluation = await parse_global_evaluation_to_json(
+                    global_text, transcript_data["text"]
+                )
+                # total_score and level calculated in parse function
+                
+                # STEP 6: Build Final Report
+                chunks = []
+                for i, chunk_info in enumerate(chunk_structure["chunks"]):
+                    # Convert MinIO object key to presigned URL (valid for 24 hours)
+                    chunk_audio_presigned_url = storage_service.get_presigned_url(
+                        bucket=storage_service.bucket_recordings,
+                        object_key=chunk_object_keys[i]
+                    )
+                    
+                    chunks.append(
+                        ChunkInfo(
+                            chunk_id=i,
+                            chunk_type=chunk_info["chunk_type"],
+                            time_range=[chunk_info["start"], chunk_info["end"]],
+                            text=chunk_info["text"],
+                            audio_url=chunk_audio_presigned_url,
+                            feedback=chunk_feedbacks[i]
+                        )
+                    )
+                
+                final_report = ToeflReportV2(
+                    global_evaluation=global_evaluation,
+                    full_transcript=FullTranscript(
+                        text=transcript_data["text"],
+                        segments=transcript_data["segments"]
+                    ),
+                    chunks=chunks
+                )
+                
+                # Save to database
                 await update_analysis_result_json(
-                    db, 
-                    analysis_id, 
-                    report_json=final_report_obj.model_dump()
+                    db, analysis_id, final_report.model_dump()
                 )
                 
             else:

@@ -4,6 +4,7 @@ import httpx
 import tempfile
 import os
 from openai import AsyncOpenAI
+from pydub import AudioSegment
 from app.config import settings
 
 
@@ -102,3 +103,75 @@ async def transcribe_audio(audio_url: str) -> str:
     #     return result.get("text", "")
     
     return "[Transcription pending - API not configured]"
+
+
+async def segment_audio_by_chunks(
+    audio_url: str,
+    chunks: list[dict],
+    recording_id: int
+) -> list[str]:
+    """
+    Segment audio using pydub and upload to MinIO.
+    
+    Args:
+        audio_url: Presigned URL to original recording
+        chunks: List of chunk dicts with start/end times
+        recording_id: Recording ID for organizing storage
+    
+    Returns:
+        List of MinIO object keys for each chunk
+    """
+    from app.services.storage_service import storage_service
+    
+    # Download audio
+    async with httpx.AsyncClient() as client:
+        response = await client.get(audio_url)
+        response.raise_for_status()
+        audio_bytes = response.content
+    
+    # Save to temp file for pydub
+    # Note: Frontend uploads webm format, so we need to handle that
+    with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as temp_file:
+        temp_file.write(audio_bytes)
+        temp_path = temp_file.name
+    
+    try:
+        # Load audio with pydub - let it auto-detect format or try webm
+        try:
+            audio = AudioSegment.from_file(temp_path)
+        except Exception as e:
+            # If auto-detect fails, try explicitly with webm
+            print(f"Auto-detect failed, trying webm: {e}")
+            audio = AudioSegment.from_file(temp_path, format="webm")
+        
+        object_keys = []
+        for i, chunk in enumerate(chunks):
+            # Convert seconds to milliseconds
+            start_ms = int(chunk["start"] * 1000)
+            end_ms = int(chunk["end"] * 1000)
+            
+            # Extract segment
+            segment = audio[start_ms:end_ms]
+            
+            # Export to temp file
+            segment_path = f"/tmp/chunk_{recording_id}_{i}.mp3"
+            segment.export(segment_path, format="mp3")
+            
+            # Upload to MinIO
+            object_key = f"chunks/{recording_id}/chunk_{i}.mp3"
+            storage_service.upload_audio_sync(
+                bucket=storage_service.bucket_recordings,
+                object_key=object_key,
+                file_path=segment_path,
+                content_type="audio/mpeg"
+            )
+            object_keys.append(object_key)
+            
+            # Clean up temp segment file
+            os.remove(segment_path)
+        
+        return object_keys
+        
+    finally:
+        # Clean up temp audio file
+        os.remove(temp_path)
