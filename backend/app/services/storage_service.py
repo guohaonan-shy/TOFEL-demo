@@ -105,6 +105,36 @@ class StorageService:
             if response:
                 response.close()
                 response.release_conn()
+    
+    def upload_audio_sync(
+        self,
+        bucket: str,
+        object_key: str,
+        file_path: str,
+        content_type: str = "audio/mpeg"
+    ) -> str:
+        """
+        Synchronous upload from file path (for pydub segments).
+        
+        Args:
+            bucket: Target bucket
+            object_key: Object path in bucket
+            file_path: Local file path
+            content_type: MIME type
+        
+        Returns:
+            Object key
+        """
+        try:
+            self.client.fput_object(
+                bucket_name=bucket,
+                object_name=object_key,
+                file_path=file_path,
+                content_type=content_type
+            )
+            return object_key
+        except S3Error as e:
+            raise Exception(f"Failed to upload audio: {e}")
 
 
 # Global instance

@@ -101,6 +101,8 @@ const App = () => {
   
   // P5 Audio Sync State
   const [currentPlayingSentence, setCurrentPlayingSentence] = useState<number | null>(null);
+  const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(null);
+  const [audioDuration, setAudioDuration] = useState<number>(45);
 
   // NEW: Backend Integration State
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -182,38 +184,58 @@ const App = () => {
     }
   }, [currentStep, isTimerRunning, isPaused, audioRecorder.isRecording, audioRecorder.audioLevel]);
 
-  // Audio Player Progress (P4 & P5)
+  // Real Audio Element Setup (P4 & P5)
   useEffect(() => {
-    let interval: ReturnType<typeof setInterval> | null = null;
-    if (isPlaying && audioProgress < audioTotalTime) {
-      interval = setInterval(() => {
-        setAudioProgress((prev) => {
-          const newProgress = prev + 0.1;
-          if (newProgress >= audioTotalTime) {
-            setIsPlaying(false);
-            return audioTotalTime;
+    if ((currentStep === 'confirmation' || currentStep === 'report') && audioRecorder.audioBlob && !audioElement) {
+      // Create audio element from recorded blob
+      const audio = new Audio(URL.createObjectURL(audioRecorder.audioBlob));
+      
+      // Set up event listeners
+      audio.addEventListener('loadedmetadata', () => {
+        setAudioDuration(audio.duration);
+      });
+      
+      audio.addEventListener('timeupdate', () => {
+        setAudioProgress(audio.currentTime);
+        
+        // P5: Update currently playing sentence based on time
+        if (currentStep === 'report' && analysisReport?.report_json) {
+          const current = analysisReport.report_json.sentence_analyses.find(
+            (s: any) => audio.currentTime >= s.start_time && audio.currentTime < s.end_time
+          );
+          if (current) {
+            const idx = analysisReport.report_json.sentence_analyses.indexOf(current);
+            setCurrentPlayingSentence(idx);
+          } else {
+            setCurrentPlayingSentence(null);
           }
-          
-          // P5: Update currently playing sentence based on time
-          if (currentStep === 'report') {
-            const current = MOCK_REPORT.transcript.find(
-              (item) => newProgress >= item.startTime && newProgress < item.endTime
-            );
-            if (current) {
-              setCurrentPlayingSentence(current.id);
-            } else {
-              setCurrentPlayingSentence(null);
-            }
-          }
-          
-          return newProgress;
-        });
-      }, 100);
+        }
+      });
+      
+      audio.addEventListener('ended', () => {
+        setIsPlaying(false);
+        setAudioProgress(0);
+      });
+      
+      setAudioElement(audio);
+      
+      return () => {
+        audio.pause();
+        URL.revokeObjectURL(audio.src);
+      };
     }
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [isPlaying, audioProgress, audioTotalTime, currentStep]);
+  }, [currentStep, audioRecorder.audioBlob, audioElement, analysisReport]);
+  
+  // Sync audio element play/pause with state
+  useEffect(() => {
+    if (audioElement) {
+      if (isPlaying) {
+        audioElement.play().catch(err => console.error('Audio play error:', err));
+      } else {
+        audioElement.pause();
+      }
+    }
+  }, [isPlaying, audioElement]);
 
   // P4.5 Analysis Polling - Real backend polling
   useEffect(() => {
@@ -382,8 +404,10 @@ const App = () => {
 
   // P5: Jump to specific audio timestamp when clicking a sentence
   const jumpToAudioTime = (startTime: number) => {
-    setAudioProgress(startTime);
-    setIsPlaying(true);
+    if (audioElement) {
+      audioElement.currentTime = startTime;
+      setIsPlaying(true);
+    }
   };
 
   // Audio Player Controls
@@ -392,8 +416,8 @@ const App = () => {
       setIsPlaying(false);
     } else {
       setIsPlaying(true);
-      if (audioProgress >= audioTotalTime) {
-        setAudioProgress(0);
+      if (audioElement && audioProgress >= audioDuration) {
+        audioElement.currentTime = 0;
       }
     }
   };
@@ -637,7 +661,7 @@ const App = () => {
 
   // P4: Confirmation Page
   const renderConfirmation = () => {
-    const progressPercentage = (audioProgress / audioTotalTime) * 100;
+    const progressPercentage = (audioProgress / audioDuration) * 100;
     
     return (
     <div className="flex flex-col items-center justify-center h-full max-w-2xl mx-auto animate-in zoom-in-95 duration-300">
@@ -665,7 +689,7 @@ const App = () => {
              </div>
              <div className="flex justify-between text-xs font-mono text-gray-400">
                <span>{formatTime(audioProgress)}</span>
-               <span>{formatTime(audioTotalTime)}</span>
+               <span>{formatTime(audioDuration)}</span>
              </div>
            </div>
         </div>
@@ -759,10 +783,23 @@ const App = () => {
   const SentenceCard = ({ sentence, index }: { sentence: any; index: number }) => {
     const isGood = sentence.evaluation.includes('优秀');
     const isExpanded = expandedSentenceId === index;
+    const isCurrentlyPlaying = currentPlayingSentence === index;
     
     return (
-      <div className={`group transition-all ${isExpanded ? 'bg-blue-50/30' : 'hover:bg-gray-50'}`}>
-        <div className="p-5 cursor-pointer" onClick={() => setExpandedSentenceId(isExpanded ? null : index)}>
+      <div className={`group transition-all ${isCurrentlyPlaying ? 'bg-blue-100/50 border-l-4 border-blue-500' : isExpanded ? 'bg-blue-50/30' : 'hover:bg-gray-50'}`}>
+        <div 
+          className="p-5 cursor-pointer" 
+          onClick={(e) => {
+            // If clicking on feedback content, just toggle expand
+            if ((e.target as HTMLElement).closest('.feedback-content')) {
+              setExpandedSentenceId(isExpanded ? null : index);
+            } else {
+              // Otherwise, jump to audio time and expand
+              jumpToAudioTime(sentence.start_time);
+              setExpandedSentenceId(index);
+            }
+          }}
+        >
           <div className="flex items-start gap-4">
             {/* Icon */}
             <div className="mt-1.5 shrink-0">
@@ -780,7 +817,7 @@ const App = () => {
               
               {/* Expandable Feedback */}
               {isExpanded && (
-                <div className="mt-4 animate-in fade-in duration-300">
+                <div className="mt-4 animate-in fade-in duration-300 feedback-content">
                   {sentence.native_version && (
                     <div className="bg-white rounded-xl border border-blue-100 p-5 shadow-sm mb-3">
                       <div className="flex items-start gap-4 mb-3">
@@ -809,6 +846,18 @@ const App = () => {
                       <div className="text-xs font-bold text-green-600 mb-1">表达：</div>
                       <div className="text-sm text-gray-700">{sentence.expression_feedback}</div>
                     </div>
+                    {sentence.pronunciation_feedback && (
+                      <div>
+                        <div className="text-xs font-bold text-purple-600 mb-1 flex items-center gap-1">
+                          <Volume2 size={12} />
+                          发音：
+                        </div>
+                        <div className="text-sm text-gray-700">{sentence.pronunciation_feedback}</div>
+                        <div className="mt-1 text-xs text-gray-500">
+                          Score: {sentence.pronunciation_score}/10
+                        </div>
+                      </div>
+                    )}
                     <div className="bg-indigo-50 p-3 rounded-lg">
                       <div className="text-xs font-bold text-indigo-600 mb-1 flex items-center gap-1">
                         <Star size={12} className="fill-indigo-200" />
@@ -913,6 +962,101 @@ const App = () => {
             </div>
           </div>
         </div>
+        
+        {/* Detailed Delivery Analysis - NEW */}
+        {report.delivery_analysis && (
+          <div className="bg-white rounded-2xl shadow-sm border p-6 mb-8">
+            <h3 className="font-bold text-gray-800 text-lg mb-4 flex items-center gap-2">
+              <Volume2 size={20} className="text-blue-600" />
+              🎙️ Delivery Analysis (from Audio)
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="bg-blue-50 p-4 rounded-lg border border-blue-100">
+                <div className="text-xs font-bold text-blue-600 uppercase mb-2">Fluency / 流畅度</div>
+                <p className="text-sm text-gray-700">{report.delivery_analysis.fluency_comment}</p>
+              </div>
+              <div className="bg-purple-50 p-4 rounded-lg border border-purple-100">
+                <div className="text-xs font-bold text-purple-600 uppercase mb-2">Pronunciation / 发音</div>
+                <p className="text-sm text-gray-700">{report.delivery_analysis.pronunciation_comment}</p>
+              </div>
+              <div className="bg-green-50 p-4 rounded-lg border border-green-100">
+                <div className="text-xs font-bold text-green-600 uppercase mb-2">Intonation / 语调</div>
+                <p className="text-sm text-gray-700">{report.delivery_analysis.intonation_comment}</p>
+              </div>
+              <div className="bg-amber-50 p-4 rounded-lg border border-amber-100">
+                <div className="text-xs font-bold text-amber-600 uppercase mb-2">Pace / 语速</div>
+                <p className="text-sm text-gray-700">{report.delivery_analysis.pace_comment}</p>
+              </div>
+              <div className="bg-indigo-50 p-4 rounded-lg border border-indigo-100 md:col-span-2">
+                <div className="text-xs font-bold text-indigo-600 uppercase mb-2">Confidence / 自信度</div>
+                <p className="text-sm text-gray-700">{report.delivery_analysis.confidence_comment}</p>
+              </div>
+            </div>
+          </div>
+        )}
+        
+        {/* Audio Timeline - NEW */}
+        {report.sentence_analyses && report.sentence_analyses.length > 0 && (
+          <div className="bg-white rounded-2xl shadow-sm border p-6 mb-8">
+            <h3 className="font-bold text-gray-800 text-lg mb-4 flex items-center gap-2">
+              <Clock size={20} className="text-blue-600" />
+              🎵 Audio Timeline
+            </h3>
+            <p className="text-sm text-gray-500 mb-4">Click on any segment to jump to that moment</p>
+            <div className="relative h-16 bg-gray-100 rounded-lg overflow-hidden">
+              {report.sentence_analyses.map((s: any, i: number) => {
+                const startPercent = (s.start_time / audioDuration) * 100;
+                const widthPercent = ((s.end_time - s.start_time) / audioDuration) * 100;
+                
+                // Color based on evaluation and pronunciation
+                let bgColor = 'bg-green-400';
+                if (s.evaluation !== '优秀') {
+                  bgColor = s.pronunciation_score < 6 ? 'bg-red-400' : 'bg-yellow-400';
+                }
+                
+                const isCurrentSegment = currentPlayingSentence === i;
+                
+                return (
+                  <div
+                    key={i}
+                    onClick={() => jumpToAudioTime(s.start_time)}
+                    className={`absolute h-full cursor-pointer transition-all hover:opacity-80 ${bgColor} ${
+                      isCurrentSegment ? 'ring-4 ring-blue-500 ring-inset z-10' : ''
+                    }`}
+                    style={{
+                      left: `${startPercent}%`,
+                      width: `${widthPercent}%`
+                    }}
+                    title={`${s.original_text} (${s.start_time.toFixed(1)}s - ${s.end_time.toFixed(1)}s)`}
+                  />
+                );
+              })}
+              {/* Playhead indicator */}
+              <div 
+                className="absolute top-0 bottom-0 w-0.5 bg-blue-600 z-20 pointer-events-none"
+                style={{ left: `${(audioProgress / audioDuration) * 100}%` }}
+              />
+            </div>
+            <div className="flex justify-between mt-2 text-xs text-gray-500">
+              <span>0:00</span>
+              <span>{formatTime(audioDuration)}</span>
+            </div>
+            <div className="flex gap-2 mt-4 text-xs">
+              <div className="flex items-center gap-1">
+                <div className="w-4 h-4 bg-green-400 rounded"></div>
+                <span className="text-gray-600">优秀</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <div className="w-4 h-4 bg-yellow-400 rounded"></div>
+                <span className="text-gray-600">可改进</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <div className="w-4 h-4 bg-red-400 rounded"></div>
+                <span className="text-gray-600">需修正</span>
+              </div>
+            </div>
+          </div>
+        )}
         
         {/* Interactive Sentence Analysis */}
         <div className="bg-white rounded-2xl shadow-sm border mb-8">

@@ -26,28 +26,54 @@ export interface RecordingResponse {
   created_at: string;
 }
 
+export interface DeliveryAnalysis {
+  overall_score: number;
+  fluency_comment: string;
+  pronunciation_comment: string;
+  intonation_comment: string;
+  pace_comment: string;
+  confidence_comment: string;
+}
+
 export interface SentenceAnalysis {
   original_text: string;
-  evaluation: string;  // "✅ 优秀" | "⚡ 可改进" | "⚠️ 需修正"
-  native_version: string | null;
+  start_time: number;
+  end_time: number;
+  
+  // Text-based analysis
+  evaluation: string;  // "优秀" | "可改进" | "需修正"
   grammar_feedback: string;
   expression_feedback: string;
   suggestion_feedback: string;
-  start_time: number;
-  end_time: number;
+  native_version: string | null;
+  
+  // Audio-based analysis (NEW)
+  pronunciation_score: number;  // 0-10
+  pronunciation_feedback: string | null;
 }
 
 export interface ReportJSON {
+  // Delivery (from audio)
+  delivery_analysis: DeliveryAnalysis;  // NEW: Detailed delivery analysis
   delivery_score: number;      // 0-10
-  delivery_comment: string;
+  
+  // Language (from text)
   language_score: number;       // 0-10
   language_comment: string;
+  
+  // Topic (from text)
   topic_score: number;          // 0-10
   topic_comment: string;
+  
+  // Overall
   total_score: number;          // 0-30
   level: string;                // "Excellent" | "Good" | "Fair" | "Weak"
   overall_summary: string;
+  
+  // Sentence-by-sentence
   sentence_analyses: SentenceAnalysis[];
+  
+  // Tips
   actionable_tips: string[];
 }
 
