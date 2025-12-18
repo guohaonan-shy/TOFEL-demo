@@ -222,8 +222,9 @@ async def analyze_full_audio_gemini(audio_url: str, question_text: str) -> Globa
     # Create client
     client = genai.Client(api_key=settings.GEMINI_API_KEY)
     
-    # Download audio
-    async with httpx.AsyncClient() as http_client:
+    # Download audio with extended timeout
+    timeout = httpx.Timeout(60.0, connect=10.0)  # 60s read, 10s connect
+    async with httpx.AsyncClient(timeout=timeout) as http_client:
         response = await http_client.get(audio_url)
         response.raise_for_status()
         audio_bytes = response.content
@@ -345,8 +346,9 @@ async def analyze_chunk_audio_gemini(
     # Create client
     client = genai.Client(api_key=settings.GEMINI_API_KEY)
     
-    # Download audio
-    async with httpx.AsyncClient() as http_client:
+    # Download audio with extended timeout
+    timeout = httpx.Timeout(60.0, connect=10.0)  # 60s read, 10s connect
+    async with httpx.AsyncClient(timeout=timeout) as http_client:
         response = await http_client.get(chunk_audio_url)
         response.raise_for_status()
         audio_bytes = response.content
@@ -724,7 +726,7 @@ async def analyze_chunk_audio_unified(
                 print(f"Gemini chunk analysis failed: {e}. Falling back to OpenAI.")
                 return await analyze_chunk_audio(chunk_audio_url, chunk_text, chunk_type)
             else:
-                raise
+                raise Exception(f"Gemini chunk analysis failed: {e}")
     else:  # openai
         return await analyze_chunk_audio(chunk_audio_url, chunk_text, chunk_type)
 
