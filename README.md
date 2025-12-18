@@ -10,10 +10,11 @@ AI驱动的托福口语练习平台，提供基于内容分块的智能反馈和
 ## ✨ 核心功能
 
 - 🎤 **浏览器录音** - 45秒录音，支持暂停/恢复
-- 🤖 **智能分析** - OpenAI Whisper转录 + GPT-4o音频分析
+- 🤖 **智能分析** - OpenAI Whisper转录 + AI音频分析（支持 Gemini / GPT-4o）
 - 📊 **逐段反馈** - 自动识别开头语和观点，提供针对性建议
 - 🔊 **音频分块播放** - 每段内容独立音频，可单独播放
 - 📈 **ETS评分** - 基于Delivery、Language Use、Topic Development三维度评分(0-30分)
+- 🔄 **灵活切换** - 支持 Gemini/OpenAI 自由切换，自动降级保障
 
 ## 🚀 快速启动
 
@@ -22,7 +23,8 @@ AI驱动的托福口语练习平台，提供基于内容分块的智能反馈和
 - Python 3.10+ 
 - Node.js 18+
 - Docker & Docker Compose
-- OpenAI API Key
+- **OpenAI API Key** (必需，用于 Whisper 转录)
+- **Gemini API Key** (可选，用于音频分析，推荐)
 - ffmpeg (用于音频处理)
 
 ### 1. 启动 Docker 服务
@@ -69,7 +71,11 @@ MINIO_ENDPOINT=localhost:9000
 MINIO_ACCESS_KEY=minioadmin
 MINIO_SECRET_KEY=minioadmin123
 MINIO_SECURE=false
-OPENAI_API_KEY=sk-your-key-here
+
+# AI 服务配置
+OPENAI_API_KEY=sk-your-openai-key-here
+GEMINI_API_KEY=your-gemini-key-here
+AUDIO_AI_PROVIDER=auto  # auto (推荐) | gemini | openai
 EOF
 ```
 
@@ -107,16 +113,19 @@ npm run dev
 ### 内容感知分块分析
 - ✅ **智能分块**: LLM自动识别开头语、观点1、观点2
 - ✅ **音频分段**: 每个段落独立音频文件，可单独播放
-- ✅ **并行处理**: Whisper + GPT-4o音频同时运行，更快
+- ✅ **并行处理**: Whisper + AI音频分析同时运行，更快
 - ✅ **Python计算评分**: 确保总分和等级计算准确
+- ✅ **多AI支持**: Gemini/OpenAI 灵活切换，自动降级
 
-### 分析流程
+### 分析流程（优化版）
 ```
 1. 上传转换 → 浏览器录音(WebM/MP4)转换为MP3存储
-2. Whisper转录 → 获取文本和时间戳
-3. LLM内容分块 → 识别2-4个语义段落
+2. Whisper转录 → 获取文本和时间戳（OpenAI）
+3. LLM内容分块 → 识别2-4个语义段落（OpenAI GPT-4o）
 4. pydub音频切分 → 从MP3创建可播放的音频段
-5. 并行音频分析 → 全局+各段落同时分析
+5. 并行音频分析 → 全局+各段落同时分析（Gemini 2.5 Pro / GPT-4o）
+   ├─ Gemini: 音频 → 直接输出JSON结构（1次调用）⚡️
+   └─ OpenAI: 音频 → 文本 → JSON解析（2次调用）
 6. Python计算评分 → total_score和level
 7. 前端展示 → 逐段分析+音频播放
 ```
@@ -127,8 +136,9 @@ npm run dev
 - FastAPI + SQLAlchemy (异步ORM)
 - PostgreSQL (数据库)
 - MinIO (对象存储 - 所有音频存储为MP3格式)
-- OpenAI Whisper (转录)
-- GPT-4o Audio Preview (发音分析)
+- OpenAI Whisper (语音转录)
+- **Google Gemini 2.5 Pro** (AI音频分析 - 推荐) ⭐️
+- GPT-4o Audio Preview (AI音频分析 - 降级选项)
 - pydub + ffmpeg (音频处理 - 上传时转换为MP3)
 
 **前端:**
@@ -144,10 +154,10 @@ TOFEL-demo/
 ├── backend/
 │   ├── app/
 │   │   ├── services/ai/
-│   │   │   ├── asr.py          # Whisper + 音频切分
-│   │   │   └── llm.py          # GPT-4o分析
+│   │   │   ├── asr.py          # Whisper转录 + 音频切分
+│   │   │   └── llm.py          # Gemini/GPT-4o AI分析（统一接口）
 │   │   ├── services/
-│   │   │   ├── analysis_service.py  # 主工作流
+│   │   │   ├── analysis_service.py  # 主工作流编排
 │   │   │   └── storage_service.py   # MinIO操作
 │   │   └── routers/            # API端点
 │   ├── migrations/             # 数据库迁移
@@ -166,8 +176,10 @@ TOFEL-demo/
 ### 后端环境变量 (`backend/.env`)
 
 ```env
-# OpenAI API (必需)
-OPENAI_API_KEY=sk-xxxxx
+# AI 服务配置
+OPENAI_API_KEY=sk-xxxxx              # OpenAI (用于 Whisper 转录，必需)
+GEMINI_API_KEY=your-gemini-key       # Google Gemini (音频分析，推荐)
+AUDIO_AI_PROVIDER=auto               # auto | gemini | openai
 
 # 数据库
 DATABASE_URL=postgresql+asyncpg://toefl:toefl123@localhost:5432/toefl_speaking
@@ -178,6 +190,26 @@ MINIO_ACCESS_KEY=minioadmin
 MINIO_SECRET_KEY=minioadmin123
 MINIO_SECURE=false
 ```
+
+### AI 提供商选择策略
+
+**`AUDIO_AI_PROVIDER=auto` (推荐)**
+- 如果配置了 `GEMINI_API_KEY` → 优先使用 Gemini
+- 否则使用 OpenAI GPT-4o
+- Gemini 失败时自动降级到 OpenAI
+
+**`AUDIO_AI_PROVIDER=gemini` (强制)**
+- 强制使用 Gemini 2.5 Pro
+- 失败时如果有 OpenAI key 会降级
+
+**`AUDIO_AI_PROVIDER=openai` (强制)**
+- 强制使用 OpenAI GPT-4o Audio
+
+**性能对比:**
+| 提供商 | 速度 | 成本 | 质量 |
+|--------|------|------|------|
+| Gemini 2.5 Pro | ⚡️ 更快 | 💰 更低 | ✅ 优秀 |
+| GPT-4o Audio | 🐢 较慢 | 💰💰 较高 | ✅ 优秀 |
 
 ### 前端环境变量 (`frontend/.env`)
 
@@ -243,6 +275,29 @@ docker-compose logs
 - 检查录音时长（至少10秒）
 - 查看后端日志获取详细错误信息
 
+### Gemini 相关问题
+
+**问题**: Gemini 配额超限 (429 RESOURCE_EXHAUSTED)
+```bash
+# 解决方案1: 切换到 OpenAI（系统会自动降级）
+AUDIO_AI_PROVIDER=openai
+
+# 解决方案2: 使用更高配额的 Gemini 模型
+# 修改 llm.py 中的模型名称: gemini-2.0-flash-exp → gemini-1.5-flash
+
+# 解决方案3: 等待配额重置（免费层每日配额）
+```
+
+**问题**: Gemini 返回英文反馈
+- 已修复：更新后的 prompt 强制要求中文输出
+- 重启后端服务器生效
+
+**问题**: 如何获取 Gemini API Key？
+- 访问: https://ai.google.dev/
+- 登录 Google 账号
+- 创建 API Key（免费层有配额限制）
+- 复制到 `.env` 文件中的 `GEMINI_API_KEY`
+
 ## 📊 JSON 输出格式
 
 ```json
@@ -298,22 +353,40 @@ docker-compose logs
 ## 📝 开发注意事项
 
 - `.env` 文件不要提交到 Git
-- OpenAI API Key 保密
+- API Keys（OpenAI、Gemini）保密
 - 录音文件存储在 MinIO `toefl-recordings` bucket (统一为MP3格式)
 - 浏览器录音(WebM/MP4)在上传时自动转换为MP3
 - 音频分块存储在 `chunks/{recording_id}/` 路径 (MP3格式)
 - 评分逻辑: ≥24=Excellent, ≥18=Good, ≥14=Fair, <14=Weak
+- **Gemini 优先**: 使用 `AUDIO_AI_PROVIDER=auto` 自动选择最优方案
+- **降级机制**: Gemini 失败会自动切换到 OpenAI，保障服务可用性
 
 ## 📈 未来增强
 
+### 功能扩展
 - [ ] 用户认证和个人档案
 - [ ] 历史进度追踪
 - [ ] 更多题型（综合口语、学术讨论）
 - [ ] 发音对比训练
 - [ ] 移动端支持
 
+### AI 优化
+- [x] Gemini 音频分析集成（v2.1）
+- [x] 自动降级机制（v2.1）
+- [x] 中文反馈优化（v2.1）
+- [ ] Gemini 转录支持（替代 Whisper）
+- [ ] 智能重试策略
+- [ ] 音频文件缓存（避免重复上传）
+- [ ] 成本和性能监控
+
 ---
 
-**Version**: 2.0 (Content-Aware Chunking)  
-**Last Updated**: December 17, 2024  
+**Version**: 2.1 (Gemini Integration)  
+**Last Updated**: December 18, 2024  
 **Built with ❤️ for TOEFL learners worldwide**
+
+### 🎉 新版本亮点 (v2.1)
+- ⚡️ **Gemini 2.5 Pro 集成**: 更快的音频分析，更低的成本
+- 🔄 **智能降级**: Gemini 失败自动切换到 OpenAI，保障服务稳定
+- 🌏 **中文优化**: 强化 prompt，确保所有反馈都是中文
+- 🎯 **一键切换**: 通过配置灵活选择 AI 提供商
