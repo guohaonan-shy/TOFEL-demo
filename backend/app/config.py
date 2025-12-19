@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     
     # Gemini
     GEMINI_API_KEY: str = ""
-    AUDIO_AI_PROVIDER: str = "gemini"  # auto, gemini, openai
+    AUDIO_AI_PROVIDER: str = "openai"  # auto, gemini, openai
     
     # Volcengine (Doubao)
     VOLCENGINE_API_KEY: str = ""

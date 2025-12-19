@@ -650,10 +650,24 @@ async def analyze_chunk_audio(
     # Chunk audio is already mp3 (from pydub export), so just encode
     audio_base64 = base64.b64encode(audio_bytes).decode()
     
-    # Chunk-specific prompts
+    # Chunk-specific analysis guidance
     type_prompts = {
-        "opening_statement": "分析开头语：发音、thesis明确度、语法、词汇、建议",
-        "viewpoint": "分析观点：流利度、逻辑、细节、语法、词汇、建议"
+        "opening_statement": """分析这段开头语：
+- 发音错误：识别1-5个最严重的发音问题（如果没有就说明发音很好）
+- 语法错误：找出语法问题并提供纠正
+- 表达优化：建议更地道、更学术的表达方式
+- 流利度：评价停顿、语速、犹豫
+- 内容：thesis陈述是否明确
+- 优点：肯定做得好的地方
+- 可操作建议：给出具体改进建议""",
+        "viewpoint": """分析这段观点阐述：
+- 发音错误：识别1-5个最严重的发音问题（如果没有就说明发音很好）
+- 语法错误：找出语法问题并提供纠正
+- 表达优化：建议更地道、更学术的表达方式
+- 流利度：评价停顿、语速、犹豫
+- 内容：论证逻辑、细节支撑是否充分
+- 优点：肯定做得好的地方
+- 可操作建议：给出具体改进建议"""
     }
     
     completion = await client.chat.completions.create(
@@ -670,13 +684,50 @@ async def analyze_chunk_audio(
                     },
                     {
                         "type": "text",
-                        "text": f"""托福教练，分析{chunk_type}。
+                        "text": f"""你是托福口语评分专家。请仔细听音频，用中文分析这段{chunk_type}。
 
-参考文本：{chunk_text}
+参考转录文本：{chunk_text}
 
-{type_prompts.get(chunk_type, "分析这段内容")}
+{type_prompts.get(chunk_type, "分析这段内容的表现")}
 
-中文markdown输出。"""
+请按以下结构输出（中文markdown格式）：
+
+## 整体评价
+2-3句话总结这段内容的表现
+
+## 发音分析
+列出发音问题（如果有）：
+- 单词：[错误单词]
+  - 你的发音：[学生发音]
+  - 正确发音：[IPA音标]
+  - 技巧：[具体发音建议]
+
+## 语法问题
+列出语法错误（如果有）：
+- 原句：[错误句子]
+- 纠正：[正确句子]
+- 解释：[为什么错误，语法规则]
+- 类型：[错误类型，如时态、主谓一致等]
+
+## 表达建议
+列出可以改进的表达（如果有）：
+- 原表达：[学生的表达]
+- 改进：[更好的表达]
+- 原因：[为什么更好]
+
+## 流利度评价
+评价语速、停顿、犹豫情况
+
+## 内容评价
+评价逻辑、相关性、细节支撑
+
+## 优点
+列出做得好的地方（至少1-2点）
+
+## 改进建议
+给出3-5条具体的、可操作的改进建议，每条标注类别（发音/语法/词汇/结构/流利度）
+
+重要：所有内容必须用中文！"""
                     }
                 ]
             }
@@ -753,6 +804,66 @@ async def parse_global_evaluation_to_json(
     )
 
 
+async def parse_chunk_feedback_to_json(
+    feedback_text: str,
+    chunk_text: str,
+    chunk_type: str
+) -> ChunkFeedbackStructured:
+    """
+    Parse markdown feedback from analyze_chunk_audio into structured JSON.
+    Uses OpenAI structured output parsing (same pattern as global evaluation).
+    
+    Args:
+        feedback_text: Markdown text from analyze_chunk_audio
+        chunk_text: Original chunk text for context
+        chunk_type: Type of chunk (opening_statement, viewpoint)
+        
+    Returns:
+        ChunkFeedbackStructured: Structured feedback object
+    """
+    if not settings.OPENAI_API_KEY:
+        raise ValueError("OPENAI_API_KEY is not set")
+    
+    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    
+    # Parse markdown into structured format
+    completion = await client.beta.chat.completions.parse(
+        model="gpt-4o-2024-08-06",
+        messages=[
+            {
+                "role": "system",
+                "content": """从音频分析的markdown文本中提取结构化反馈。
+
+要求：
+1. 识别发音问题（pronunciation_issues）：单词、学生发音、正确发音、技巧
+2. 识别语法错误（grammar_issues）：原句、纠正、解释、错误类型
+3. 表达建议（expression_suggestions）：原表达、改进表达、原因
+4. 流利度评价（fluency_notes）：语速、停顿、犹豫
+5. 内容评价（content_notes）：逻辑、相关性、细节
+6. 可操作建议（actionable_tips）：分类和具体建议
+7. 优点（strengths）：做得好的地方
+
+所有内容必须用中文。如果某个字段在原文中没有明确信息，可以返回空数组或null。"""
+            },
+            {
+                "role": "user",
+                "content": f"""分析文本：
+{feedback_text}
+
+原始转录：
+{chunk_text}
+
+类型：{chunk_type}
+
+请提取结构化反馈。"""
+            }
+        ],
+        response_format=ChunkFeedbackStructured
+    )
+    
+    return completion.choices[0].message.parsed
+
+
 # --- Unified Interface Functions ---
 
 async def analyze_full_audio_unified(audio_url: str, question_text: str) -> GlobalEvaluation:
@@ -808,13 +919,16 @@ async def analyze_chunk_audio_unified(
         except Exception as e:
             if settings.OPENAI_API_KEY:
                 print(f"Gemini chunk analysis failed: {e}. Falling back to OpenAI.")
-                # Note: OpenAI version still returns str, needs future implementation for structured output
-                raise Exception(f"Gemini chunk analysis failed and OpenAI structured output not yet implemented: {e}")
+                # Fallback to OpenAI two-step process
+                feedback_text = await analyze_chunk_audio(chunk_audio_url, chunk_text, chunk_type)
+                return await parse_chunk_feedback_to_json(feedback_text, chunk_text, chunk_type)
             else:
                 raise Exception(f"Gemini chunk analysis failed: {e}")
     else:  # openai
-        # Note: OpenAI version needs implementation for structured output
-        raise NotImplementedError("OpenAI chunk analysis with structured output not yet implemented. Use Gemini provider.")
+        # Step 1: Audio analysis (markdown)
+        feedback_text = await analyze_chunk_audio(chunk_audio_url, chunk_text, chunk_type)
+        # Step 2: Parse to structured JSON
+        return await parse_chunk_feedback_to_json(feedback_text, chunk_text, chunk_type)
 
 
 # --- Legacy / Volcengine Logic ---
