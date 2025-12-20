@@ -1,7 +1,14 @@
-"""Database models."""
+"""Database models and repositories."""
 
-from app.models.question import Question
-from app.models.recording import Recording
-from app.models.analysis import AnalysisResult
+from app.models.question import Question, QuestionRepository
+from app.models.recording import Recording, RecordingRepository
+from app.models.analysis import AnalysisResult, AnalysisResultRepository
 
-__all__ = ["Question", "Recording", "AnalysisResult"]
+__all__ = [
+    "Question",
+    "QuestionRepository",
+    "Recording", 
+    "RecordingRepository",
+    "AnalysisResult", 
+    "AnalysisResultRepository",
+]

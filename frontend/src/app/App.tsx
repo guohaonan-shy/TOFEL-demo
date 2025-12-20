@@ -1,13 +1,28 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Routes, Route, useParams, useNavigate, Navigate } from 'react-router-dom';
 import { ChevronRight, AlertCircle, ChevronUp } from 'lucide-react';
 
 // API and Hooks
-import { fetchQuestion, uploadRecording, startAnalysis, getAnalysisResult, type Question, type AnalysisResponse } from '../services/api';
+import { 
+  fetchQuestion, 
+  submitAnalysisWithSSE, 
+  type Question, 
+  type AnalysisResponse,
+  type SSEEvent,
+  type ReportJSONV2
+} from '../services/api';
 import { useAudioRecorder } from '../hooks/useAudioRecorder';
 import { useQuestionAudio } from '../hooks/useQuestionAudio';
 
 // Default question ID for initial load
 const DEFAULT_QUESTION_ID = 'question_01KCH9WP8W6TZXA5QXS1BFF6AS';
+
+// Valid steps for URL routing
+const VALID_STEPS = ['detail', 'practice', 'confirmation', 'analyzing', 'report'] as const;
+type StepType = typeof VALID_STEPS[number];
+
+// Practice phases (internal to practice page)
+type PracticePhase = 'listening' | 'preparing' | 'recording';
 
 // Development mode - skip microphone permission check for UI debugging
 // Auto-detect: skip if getUserMedia is not available (e.g., Cursor Visual Editor, some webviews)
@@ -26,17 +41,41 @@ import { Sidebar } from './components/layout/Sidebar';
 // Page Components
 import { 
   DetailPage, 
-  PrepPage, 
-  RecordingPage, 
+  PracticePage, 
   ConfirmationPage, 
   AnalyzingPage, 
   ReportPage,
   type AnalysisStep 
 } from './pages';
 
-const App = () => {
-  // Core Steps: 'detail' (P1) -> 'prep_tts' (P2-1) -> 'prep_countdown' (P2-2) -> 'recording' (P3) -> 'confirmation' (P4) -> 'analyzing' (P4.5) -> 'report' (P5)
-  const [currentStep, setCurrentStep] = useState('detail'); 
+// Question Practice Page - handles all steps for a specific question
+const QuestionPage = () => {
+  // Get question ID and step from URL path
+  const { questionId, step } = useParams<{ questionId: string; step?: string }>();
+  const navigate = useNavigate();
+  
+  // Map URL step to internal step type
+  const getStepFromUrl = (): StepType => {
+    if (!step) return 'detail';
+    if (VALID_STEPS.includes(step as StepType)) return step as StepType;
+    return 'detail';
+  };
+
+  // Core Steps: 'detail' -> 'practice' -> 'confirmation' -> 'analyzing' -> 'report'
+  const [currentStep, setCurrentStep] = useState<StepType>(getStepFromUrl);
+  
+  // Practice phase (internal to practice step): 'listening' -> 'preparing' -> 'recording'
+  const [practicePhase, setPracticePhase] = useState<PracticePhase>('listening');
+  
+  // Navigate to new step via URL
+  const navigateToStep = (newStep: StepType) => {
+    setCurrentStep(newStep);
+    if (newStep === 'detail') {
+      navigate(`/questions/${questionId}`);
+    } else {
+      navigate(`/questions/${questionId}/${newStep}`);
+    }
+  }; 
   
   // Timer State
   const [timeLeft, setTimeLeft] = useState(15);
@@ -54,13 +93,21 @@ const App = () => {
   const recordingPlayerRef = useRef<HTMLAudioElement | null>(null);
   const recordingBlobUrlRef = useRef<string | null>(null);
   
-  // P4.5 Analysis Progress State
+  // P4.5 Analysis Progress State - AI Tutor style labels
   const [analysisSteps, setAnalysisSteps] = useState<AnalysisStep[]>([
-    { id: 1, label: 'Transcription', status: 'pending' },
-    { id: 2, label: 'Rating', status: 'pending' },
-    { id: 3, label: 'Grammar Analysis', status: 'pending' },
-    { id: 4, label: 'Generating Feedback', status: 'pending' }
+    { id: 1, label: 'Response received securely', status: 'pending' },
+    { id: 2, label: 'Listening for every word', status: 'pending' },
+    { id: 3, label: 'AI Deep Analysis', status: 'pending' },
+    { id: 4, label: 'Generating score & personalized tips', status: 'pending' }
   ]);
+  
+  // Map SSE step type to step ID
+  const stepTypeToId: Record<string, number> = {
+    'uploading': 1,
+    'transcribing': 2,
+    'analyzing': 3,
+    'generating': 4
+  };
   
   // P5 Report State
   const [expandedSentenceId, setExpandedSentenceId] = useState<number | null>(null);
@@ -68,8 +115,6 @@ const App = () => {
   // Backend Integration State
   const [currentQuestion, setCurrentQuestion] = useState<Question | null>(null);
   const [isLoadingQuestion, setIsLoadingQuestion] = useState(false);
-  const [recordingId, setRecordingId] = useState<number | null>(null);
-  const [taskId, setTaskId] = useState<number | null>(null);
   const [analysisReport, setAnalysisReport] = useState<AnalysisResponse | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
   
@@ -84,13 +129,14 @@ const App = () => {
 
   // ---------------- Logic Controllers ----------------
 
-  // P1: Fetch default question on Mount and cache audio
+  // P1: Fetch question on Mount and cache audio
   useEffect(() => {
+    if (!questionId) return;
     const loadQuestion = async () => {
       setIsLoadingQuestion(true);
       setApiError(null);
       try {
-        const question = await fetchQuestion(DEFAULT_QUESTION_ID);
+        const question = await fetchQuestion(questionId);
         setCurrentQuestion(question);
         
         // Pre-load and cache the question audio
@@ -106,15 +152,15 @@ const App = () => {
       }
     };
     loadQuestion();
-  }, []);
+  }, [questionId]);
 
   // Pre-warm microphone when countdown is about to end (5 seconds left)
   useEffect(() => {
-    if (currentStep === 'prep_countdown' && timeLeft === 5 && !DEV_SKIP_MIC_CHECK) {
+    if (currentStep === 'practice' && practicePhase === 'preparing' && timeLeft === 5 && !DEV_SKIP_MIC_CHECK) {
       console.log('Pre-warming microphone for recording...');
       audioRecorder.warmup();
     }
-  }, [currentStep, timeLeft]);
+  }, [currentStep, practicePhase, timeLeft]);
 
   // Countdown Logic
   useEffect(() => {
@@ -131,15 +177,13 @@ const App = () => {
     };
   }, [isTimerRunning, isPaused, timeLeft]);
 
-  // P2 Auto Flow: When in prep_tts, audio is playing. After audio ends, beep and start countdown.
-  // This effect is now handled by startPracticeFlow which plays audio then transitions.
-
   // Recording Waveform Animation - use ref to access latest audioLevel without re-triggering effect
   const audioLevelRef = useRef(audioRecorder.audioLevel);
   audioLevelRef.current = audioRecorder.audioLevel;
 
   useEffect(() => {
-    if (currentStep === 'recording' && isTimerRunning && !isPaused && audioRecorder.isRecording) {
+    const isRecordingPhase = currentStep === 'practice' && practicePhase === 'recording';
+    if (isRecordingPhase && isTimerRunning && !isPaused && audioRecorder.isRecording) {
       const updateBars = () => {
         // Read from ref to get latest value without dependency issues
         const baseLevel = audioLevelRef.current;
@@ -151,10 +195,10 @@ const App = () => {
       };
       const barInterval = setInterval(updateBars, 80);
       return () => clearInterval(barInterval);
-    } else if (currentStep !== 'recording' || isPaused) {
+    } else if (!isRecordingPhase || isPaused) {
       setAudioBars(new Array(30).fill(10));
     }
-  }, [currentStep, isTimerRunning, isPaused, audioRecorder.isRecording]);
+  }, [currentStep, practicePhase, isTimerRunning, isPaused, audioRecorder.isRecording]);
 
   // Cleanup recording player on unmount or when leaving confirmation page
   useEffect(() => {
@@ -170,62 +214,48 @@ const App = () => {
     };
   }, []);
 
-  // P4.5 Analysis Polling
-  useEffect(() => {
-    if (currentStep === 'analyzing' && taskId) {
-      setAnalysisSteps([
-        { id: 1, label: 'Transcription', status: 'completed' },
-        { id: 2, label: 'Rating', status: 'completed' },
-        { id: 3, label: 'AI Analysis', status: 'processing' },
-        { id: 4, label: 'Generating Report', status: 'pending' }
-      ]);
-
-      let pollCount = 0;
-      const maxPolls = 60;
-
-      const pollInterval = setInterval(async () => {
-        pollCount++;
-
-        if (pollCount > maxPolls) {
-          clearInterval(pollInterval);
-          setApiError('Analysis timeout - please try again');
-          setCurrentStep('confirmation');
-          return;
+  // SSE Event Handler for analysis progress
+  const handleSSEEvent = (event: SSEEvent) => {
+    if (event.type === 'completed') {
+      // All steps completed, set report and navigate
+      setAnalysisSteps(prev => prev.map(s => ({ ...s, status: 'completed' })));
+      setAnalysisReport({
+        task_id: 0,
+        status: 'completed',
+        report_markdown: null,
+        report_json: event.report,
+        error_message: null,
+        created_at: new Date().toISOString()
+      });
+      setTimeout(() => navigateToStep('report'), 800);
+    } else if (event.type === 'error') {
+      setApiError(event.message);
+      navigateToStep('confirmation');
+    } else {
+      // Step event (uploading, transcribing, analyzing, generating)
+      const stepId = stepTypeToId[event.type];
+      if (stepId) {
+        if (event.status === 'start') {
+          // Set this step to processing
+          setAnalysisSteps(prev => prev.map(s => 
+            s.id === stepId ? { ...s, status: 'processing' } : s
+          ));
+        } else if (event.status === 'completed') {
+          // Set this step to completed
+          setAnalysisSteps(prev => prev.map(s => 
+            s.id === stepId ? { ...s, status: 'completed' } : s
+          ));
         }
-
-        try {
-          const result = await getAnalysisResult(taskId);
-          
-          if (result.status === 'completed') {
-            setAnalysisSteps(prev => prev.map(s => ({...s, status: 'completed'})));
-            setAnalysisReport(result);
-            clearInterval(pollInterval);
-            setTimeout(() => setCurrentStep('report'), 800);
-          } else if (result.status === 'failed') {
-            clearInterval(pollInterval);
-            setApiError(result.error_message || 'Analysis failed');
-            setCurrentStep('confirmation');
-          } else {
-            setAnalysisSteps(prev => prev.map(s => 
-              s.id === 3 ? {...s, status: 'processing'} : 
-              s.id === 4 ? {...s, status: 'pending'} : s
-            ));
-          }
-        } catch (error) {
-          console.error('Error polling analysis:', error);
-        }
-      }, 2000);
-
-      return () => clearInterval(pollInterval);
+      }
     }
-  }, [currentStep, taskId]);
+  };
 
   const handleTimerComplete = async () => {
-    if (currentStep === 'prep_countdown') {
+    if (currentStep === 'practice' && practicePhase === 'preparing') {
       // Play beep before starting recording
       await questionAudio.playBeep();
       startRecordingPhase();
-    } else if (currentStep === 'recording') {
+    } else if (currentStep === 'practice' && practicePhase === 'recording') {
       finishRecording();
     }
   };
@@ -277,50 +307,58 @@ const App = () => {
     }
   };
 
-  // Start the practice flow: Check permission -> Play question audio -> beep -> 15s countdown -> beep -> recording
+  // Start the practice flow: Navigate + Play audio immediately, check permission in parallel
   const startPracticeFlow = async () => {
     setApiError(null);
-    
-    // Step 0: Request microphone permission first
-    const hasPermission = await requestMicrophonePermission();
-    if (!hasPermission) {
-      return; // Stop if permission denied
-    }
-    
     setIsSOSOpen(false);
     
-    // Step 1: Switch to prep_tts page AND start playing audio simultaneously
-    // Use Promise.all to ensure UI updates and audio starts at the same time
-    setCurrentStep('prep_tts');
-    
+    // Step 1: Navigate immediately for instant UI feedback
+    setPracticePhase('listening');
+    navigateToStep('practice');
+
+    // Step 2: Start audio playback AND check mic permission in PARALLEL
+    // Audio playback doesn't need mic permission, so we can do both at once
+    const [, permissionResult] = await Promise.all([
+      // Task A: Play question audio (doesn't need mic)
+      (async () => {
+        try {
+          await questionAudio.playQuestionAudio();
+        } catch (error) {
+          console.error('Error playing question audio:', error);
+        }
+      })(),
+      // Task B: Check mic permission (for later recording)
+      requestMicrophonePermission()
+    ]);
+
+    // Check permission result after audio finishes
+    if (!permissionResult) {
+      // Permission denied, go back to detail page
+      navigateToStep('detail');
+      return;
+    }
+
     try {
-      // Start audio playback immediately (audio should already be preloaded)
-      await questionAudio.playQuestionAudio();
-      
-      // Step 2: Play beep to signal countdown start
+      // Step 3: Play beep to signal countdown start
       await questionAudio.playBeep();
       
-      // Step 3: Start 15 second countdown
+      // Step 4: Start 15 second countdown
       startPrepCountdown();
     } catch (error) {
       console.error('Error in practice flow:', error);
-      // If audio fails, still proceed with countdown after beep
-      try {
-        await questionAudio.playBeep();
-      } catch {}
       startPrepCountdown();
     }
   };
 
   const startPrepCountdown = () => {
-    setCurrentStep('prep_countdown');
+    setPracticePhase('preparing');
     setTimeLeft(15);
     setIsTimerRunning(true);
   };
 
   const startRecordingPhase = () => {
-    // Update UI immediately - no waiting
-    setCurrentStep('recording');
+    // Update UI immediately - no waiting (stay on practice page, switch phase)
+    setPracticePhase('recording');
     setTimeLeft(45);
     setIsTimerRunning(true);
     
@@ -394,13 +432,13 @@ const App = () => {
     if (DEV_SKIP_MIC_CHECK) {
       console.warn('[DEV MODE] No actual recording - using calculated duration:', finalDuration);
       setAudioDuration(finalDuration);
-      setCurrentStep('confirmation');
+      navigateToStep('confirmation');
       return;
     }
     
     // Set calculated duration immediately (will be updated when blob is ready)
     setAudioDuration(finalDuration);
-    setCurrentStep('confirmation');
+    navigateToStep('confirmation');
   };
   
   // Effect to set up audio playback when blob becomes available
@@ -463,71 +501,57 @@ const App = () => {
     // In dev mode, skip to analyzing step for UI debugging
     if (DEV_SKIP_MIC_CHECK) {
       console.warn('[DEV MODE] Skipping actual analysis submission');
-      setCurrentStep('analyzing');
-      // Simulate analysis completion after 3 seconds
-      setTimeout(() => {
-        setAnalysisSteps(prev => prev.map(s => ({...s, status: 'completed'})));
-        // Set mock report for UI testing
-        setAnalysisReport({
-          task_id: 0,
-          status: 'completed',
-          report_markdown: null,
-          report_json: {
-            delivery_analysis: {
-              overall_score: 8,
-              fluency_comment: '语速适中，表达流畅',
-              pronunciation_comment: '发音清晰准确',
-              intonation_comment: '语调自然',
-              pace_comment: '节奏把控良好',
-              confidence_comment: '表达自信',
-            },
-            delivery_score: 8,
-            language_score: 7,
-            language_comment: 'Minor grammar issues',
-            topic_score: 8,
-            topic_comment: 'Well-developed ideas',
-            total_score: 23,
-            level: 'Good',
-            overall_summary: '[DEV MODE] This is a mock report for UI debugging. Your response demonstrates good speaking skills with clear pronunciation and logical structure.',
-            sentence_analyses: [
-              {
-                original_text: 'I believe that taking a gap year is beneficial.',
-                start_time: 0,
-                end_time: 3,
-                evaluation: '优秀',
-                grammar_feedback: '语法正确',
-                expression_feedback: '表达清晰',
-                suggestion_feedback: '可以使用更高级的词汇如 "firmly believe" 来增强语气',
-                native_version: 'I firmly believe that taking a gap year can be highly beneficial.',
-                pronunciation_score: 8,
-                pronunciation_feedback: '发音清晰准确',
+      navigateToStep('analyzing');
+      // Simulate SSE events for dev mode
+      const mockEvents = [
+        { type: 'uploading', status: 'start' },
+        { type: 'uploading', status: 'completed' },
+        { type: 'transcribing', status: 'start' },
+        { type: 'transcribing', status: 'completed' },
+        { type: 'analyzing', status: 'start' },
+        { type: 'analyzing', status: 'completed' },
+        { type: 'generating', status: 'start' },
+        { type: 'generating', status: 'completed' },
+      ];
+      
+      let i = 0;
+      const interval = setInterval(() => {
+        if (i < mockEvents.length) {
+          handleSSEEvent(mockEvents[i] as SSEEvent);
+          i++;
+        } else {
+          clearInterval(interval);
+          // Send mock completed event with V2 report
+          handleSSEEvent({
+            type: 'completed',
+            report: {
+              analysis_version: '2.0',
+              global_evaluation: {
+                total_score: 23,
+                score_breakdown: { delivery: 8, language_use: 7, topic_development: 8 },
+                level: 'Good',
+                overall_summary: '[DEV MODE] Mock report for UI debugging.',
+                detailed_feedback: 'Your response demonstrates good speaking skills.'
               },
-              {
-                original_text: 'Because it give students time to explore.',
-                start_time: 3,
-                end_time: 6,
-                evaluation: '可改进',
-                grammar_feedback: '主谓一致错误: "it give" 应为 "it gives"',
-                expression_feedback: '表达较简单',
-                suggestion_feedback: '添加形容词如 "valuable" 来丰富表达',
-                native_version: 'Because it gives students valuable time to explore their interests.',
-                pronunciation_score: 7,
-                pronunciation_feedback: '部分单词发音可以更清晰',
+              full_transcript: {
+                text: 'I believe that taking a gap year is beneficial.',
+                segments: [{ start: 0, end: 3, text: 'I believe that taking a gap year is beneficial.' }]
               },
-            ],
-            actionable_tips: [
-              '注意第三人称单数动词变化',
-              '使用更丰富的形容词来增强表达',
-              '保持良好的语速和停顿',
-            ],
-          },
-          error_message: null,
-          created_at: new Date().toISOString(),
-        });
-        setTimeout(() => setCurrentStep('report'), 500);
-      }, 2000);
+              chunks: []
+            }
+          });
+        }
+      }, 400);
       return;
     }
+    
+    // Stop any playing audio before submitting
+    if (recordingPlayerRef.current) {
+      recordingPlayerRef.current.pause();
+      recordingPlayerRef.current.currentTime = 0;
+    }
+    setIsPlaying(false);
+    setAudioProgress(0);
     
     if (!audioRecorder.audioBlob) {
       setApiError('No recording available');
@@ -539,24 +563,28 @@ const App = () => {
       return;
     }
 
-    setCurrentStep('analyzing');
+    // Reset analysis steps with AI Tutor style labels
+    setAnalysisSteps([
+      { id: 1, label: 'Response received securely', status: 'pending' },
+      { id: 2, label: 'Listening for every word', status: 'pending' },
+      { id: 3, label: 'AI Deep Analysis', status: 'pending' },
+      { id: 4, label: 'Generating score & personalized tips', status: 'pending' }
+    ]);
+    navigateToStep('analyzing');
     setApiError(null);
 
     try {
-      setAnalysisSteps(prev => prev.map(s => s.id === 1 ? {...s, status: 'processing'} : s));
-      const uploadResult = await uploadRecording(audioRecorder.audioBlob, currentQuestion.question_id);
-      setRecordingId(uploadResult.id);
-      setAnalysisSteps(prev => prev.map(s => s.id === 1 ? {...s, status: 'completed'} : s));
-
-      setAnalysisSteps(prev => prev.map(s => s.id === 2 ? {...s, status: 'processing'} : s));
-      const analysisResult = await startAnalysis(uploadResult.id);
-      setTaskId(analysisResult.task_id);
-      setAnalysisSteps(prev => prev.map(s => s.id === 2 ? {...s, status: 'completed'} : s));
+      // Use SSE streaming API
+      await submitAnalysisWithSSE(
+        audioRecorder.audioBlob,
+        currentQuestion.question_id,
+        handleSSEEvent
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to submit recording';
       setApiError(message);
       console.error('Error submitting for analysis:', error);
-      setCurrentStep('confirmation');
+      navigateToStep('confirmation');
     }
   };
 
@@ -571,7 +599,7 @@ const App = () => {
       recordingBlobUrlRef.current = null;
     }
     
-    setCurrentStep('detail');
+    navigateToStep('detail');
     setTimeLeft(15);
     setIsTimerRunning(false);
     setIsSOSOpen(false);
@@ -695,19 +723,10 @@ const App = () => {
           />
         );
       
-      case 'prep_tts':
-      case 'prep_countdown':
+      case 'practice':
         return (
-          <PrepPage
-            currentStep={currentStep as 'prep_tts' | 'prep_countdown'}
-            currentQuestion={currentQuestion}
-            timeLeft={timeLeft}
-          />
-        );
-      
-      case 'recording':
-        return (
-          <RecordingPage
+          <PracticePage
+            phase={practicePhase}
             currentQuestion={currentQuestion}
             timeLeft={timeLeft}
             isPaused={isPaused}
@@ -768,12 +787,12 @@ const App = () => {
         
         {/* Progress Dots */}
         <div className="flex items-center gap-1.5">
-           {['Detail', 'Prep', 'Record', 'Result'].map((s, i) => {
-             const stepIdx = ['detail', 'prep_tts', 'prep_countdown', 'recording', 'confirmation', 'analyzing', 'report'].indexOf(currentStep);
+           {['Detail', 'Practice', 'Confirm', 'Result'].map((s, i) => {
+             // Map current step to visual progress
              let visualIdx = 0;
-             if (stepIdx >= 1) visualIdx = 1;
-             if (stepIdx >= 3) visualIdx = 2;
-             if (stepIdx >= 5) visualIdx = 3;
+             if (currentStep === 'practice') visualIdx = 1;
+             if (currentStep === 'confirmation') visualIdx = 2;
+             if (currentStep === 'analyzing' || currentStep === 'report') visualIdx = 3;
              
              return (
                <div key={s} className={`h-2 rounded-full transition-all duration-500 ${visualIdx >= i ? 'w-8 bg-blue-600' : 'w-2 bg-gray-200'}`} />
@@ -808,6 +827,20 @@ const App = () => {
         </div>
       </main>
     </div>
+  );
+};
+
+// Main App with Routes
+const App = () => {
+  return (
+    <Routes>
+      {/* Default redirect to default question */}
+      <Route path="/" element={<Navigate to={`/questions/${DEFAULT_QUESTION_ID}`} replace />} />
+      
+      {/* Question routes */}
+      <Route path="/questions/:questionId" element={<QuestionPage />} />
+      <Route path="/questions/:questionId/:step" element={<QuestionPage />} />
+    </Routes>
   );
 };
 

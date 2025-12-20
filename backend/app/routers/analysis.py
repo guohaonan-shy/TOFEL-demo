@@ -1,74 +1,102 @@
 """Analysis API endpoints."""
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
+import asyncio
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.database import get_db
-from app.models import Recording, AnalysisResult
-from app.schemas import AnalysisCreate, AnalysisResponse, AnalysisStatusResponse
-from app.services.analysis_service import run_analysis_task
+from app.models import AnalysisResult
+from app.schemas import AnalysisResponse
+from app.services.analysis_service import run_streaming_analysis, AudioFile
 
 router = APIRouter(prefix="/analysis")
 
 
-@router.post("", response_model=AnalysisStatusResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post("")
 async def create_analysis(
-    analysis_data: AnalysisCreate,
-    background_tasks: BackgroundTasks,
+    question_id: str = Form(...),
+    audio: UploadFile = File(...),
     db: AsyncSession = Depends(get_db)
 ):
-    """Submit a recording for AI analysis."""
-    # Verify recording exists
-    result = await db.execute(
-        select(Recording).where(Recording.id == analysis_data.recording_id)
-    )
-    recording = result.scalar_one_or_none()
+    """
+    Submit audio for AI analysis with SSE progress events.
     
-    if not recording:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Recording {analysis_data.recording_id} not found"
+    This endpoint combines audio upload and analysis into a single streaming response.
+    The client receives real-time progress updates via Server-Sent Events (SSE).
+    
+    SSE Event Format:
+    - Step progress: {"type": "uploading|transcribing|analyzing|generating", "status": "start|completed"}
+    - Completion: {"type": "completed", "report": {...}}
+    - Error: {"type": "error", "message": "...", "step": "..."}
+    
+    Args:
+        question_id: The question ID being answered
+        audio: The audio file (WebM/MP4/OGG format from browser)
+        
+    Returns:
+        StreamingResponse with text/event-stream content type
+    """
+    # Read audio data and create AudioFile object
+    audio_data = await audio.read()
+    audio_file = AudioFile(
+        data=audio_data,
+        filename=audio.filename or "audio.webm",
+        content_type=audio.content_type or "audio/webm"
+    )
+    
+    async def event_generator():
+        """Generate SSE events during analysis."""
+        # Queue to collect events from the analysis task
+        event_queue: asyncio.Queue[str] = asyncio.Queue()
+        
+        async def send_event(event: str):
+            """Callback to queue SSE events."""
+            await event_queue.put(event)
+        
+        # Start analysis task
+        analysis_task = asyncio.create_task(
+            run_streaming_analysis(db, audio_file, question_id, send_event)
         )
+        
+        # Yield events as they come in
+        try:
+            while True:
+                # Wait for next event or task completion
+                try:
+                    # Use wait_for to periodically check if task is done
+                    event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
+                    yield event
+                    
+                    # Check if this was the final event (completed or error)
+                    if '"type": "completed"' in event or '"type": "error"' in event:
+                        break
+                        
+                except asyncio.TimeoutError:
+                    # Check if task failed
+                    if analysis_task.done():
+                        # Get exception if any
+                        try:
+                            analysis_task.result()
+                        except Exception:
+                            pass  # Error already sent via SSE
+                        break
+                    continue
+                    
+        except Exception as e:
+            # Send error event if generator fails
+            from app.schemas.sse import SSEErrorEvent
+            yield SSEErrorEvent(message=str(e)).to_sse()
     
-    # Check if analysis already exists
-    existing_result = await db.execute(
-        select(AnalysisResult).where(
-            AnalysisResult.recording_id == analysis_data.recording_id
-        )
-    )
-    existing = existing_result.scalar_one_or_none()
-    
-    if existing:
-        # Return existing analysis status
-        return AnalysisStatusResponse(
-            task_id=existing.id,
-            status=existing.status,
-            step=None
-        )
-    
-    # Create new analysis task
-    analysis = AnalysisResult(
-        recording_id=analysis_data.recording_id,
-        status="pending"
-    )
-    
-    db.add(analysis)
-    await db.flush()
-    await db.refresh(analysis)
-    await db.commit()  # Commit before background task
-    
-    # Queue background task
-    background_tasks.add_task(
-        run_analysis_task,
-        analysis_id=analysis.id,
-        recording_id=recording.id
-    )
-    
-    return AnalysisStatusResponse(
-        task_id=analysis.id,
-        status="processing",
-        step="queued"
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        }
     )
 
 
@@ -92,34 +120,7 @@ async def get_analysis(
     return AnalysisResponse(
         task_id=analysis.id,
         status=analysis.status,
-        report_markdown=None,  # Deprecated, always None
-        report_json=analysis.report_json,
-        error_message=analysis.error_message,
-        created_at=analysis.created_at
-    )
-
-
-@router.get("/recording/{recording_id}", response_model=AnalysisResponse)
-async def get_analysis_by_recording(
-    recording_id: int,
-    db: AsyncSession = Depends(get_db)
-):
-    """Get analysis result by recording ID."""
-    result = await db.execute(
-        select(AnalysisResult).where(AnalysisResult.recording_id == recording_id)
-    )
-    analysis = result.scalar_one_or_none()
-    
-    if not analysis:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Analysis for recording {recording_id} not found"
-        )
-    
-    return AnalysisResponse(
-        task_id=analysis.id,
-        status=analysis.status,
-        report_markdown=None,  # Deprecated, always None
+        report_markdown=None,
         report_json=analysis.report_json,
         error_message=analysis.error_message,
         created_at=analysis.created_at

@@ -90,10 +90,9 @@ export interface ChunkFeedbackStructured {
 export interface ChunkAnalysis {
   chunk_id: number;
   chunk_type: string;  // "opening_statement" | "viewpoint"
-  time_range: [number, number];
+  time_range: [number, number];  // [start, end] in seconds for frontend playback
   text: string;
-  audio_url: string;
-  feedback_structured: ChunkFeedbackStructured;  // Changed from feedback: string
+  feedback_structured: ChunkFeedbackStructured;
 }
 
 export interface ReportJSONV2 {
@@ -163,6 +162,28 @@ export interface AnalysisStatusResponse {
   status: string;
   step?: string | null;
 }
+
+// SSE Event Types
+export type SSEStepType = 'uploading' | 'transcribing' | 'analyzing' | 'generating';
+export type SSEStepStatus = 'start' | 'completed';
+
+export interface SSEStepEvent {
+  type: SSEStepType;
+  status: SSEStepStatus;
+}
+
+export interface SSECompletedEvent {
+  type: 'completed';
+  report: ReportJSONV2;
+}
+
+export interface SSEErrorEvent {
+  type: 'error';
+  message: string;
+  step?: string;
+}
+
+export type SSEEvent = SSEStepEvent | SSECompletedEvent | SSEErrorEvent;
 
 export interface AnalysisResponse {
   task_id: number;
@@ -264,5 +285,66 @@ export async function getAnalysisResult(taskId: number): Promise<AnalysisRespons
   }
   
   return response.json();
+}
+
+/**
+ * Submit audio for AI analysis with SSE streaming progress
+ * @param audioBlob - The recorded audio as a Blob
+ * @param questionId - The ID of the question being answered
+ * @param onEvent - Callback for each SSE event
+ */
+export async function submitAnalysisWithSSE(
+  audioBlob: Blob,
+  questionId: string,
+  onEvent: (event: SSEEvent) => void
+): Promise<void> {
+  const formData = new FormData();
+  formData.append('audio', audioBlob, 'recording.webm');
+  formData.append('question_id', questionId);
+  
+  const response = await fetch(`${API_BASE_URL}/analysis`, {
+    method: 'POST',
+    body: formData,
+  });
+  
+  if (!response.ok) {
+    throw new Error(`Failed to start analysis: ${response.statusText}`);
+  }
+  
+  if (!response.body) {
+    throw new Error('No response body for SSE stream');
+  }
+  
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  
+  while (true) {
+    const { done, value } = await reader.read();
+    
+    if (done) {
+      break;
+    }
+    
+    buffer += decoder.decode(value, { stream: true });
+    
+    // Parse SSE events from buffer
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';  // Keep incomplete line in buffer
+    
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const jsonStr = line.slice(6).trim();
+        if (jsonStr) {
+          try {
+            const event = JSON.parse(jsonStr) as SSEEvent;
+            onEvent(event);
+          } catch (e) {
+            console.error('Failed to parse SSE event:', jsonStr, e);
+          }
+        }
+      }
+    }
+  }
 }
 

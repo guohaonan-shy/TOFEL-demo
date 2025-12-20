@@ -110,28 +110,43 @@ class StorageService:
         self,
         bucket: str,
         object_key: str,
-        file_path: str,
+        file_path: str | None = None,
+        data: bytes | None = None,
         content_type: str = "audio/mpeg"
     ) -> str:
         """
-        Synchronous upload from file path (for pydub segments).
+        Synchronous upload from file path or bytes.
         
         Args:
             bucket: Target bucket
             object_key: Object path in bucket
-            file_path: Local file path
+            file_path: Local file path (optional if data is provided)
+            data: Audio bytes (optional if file_path is provided)
             content_type: MIME type
         
         Returns:
             Object key
         """
         try:
-            self.client.fput_object(
-                bucket_name=bucket,
-                object_name=object_key,
-                file_path=file_path,
-                content_type=content_type
-            )
+            if data is not None:
+                # Upload from bytes
+                self.client.put_object(
+                    bucket_name=bucket,
+                    object_name=object_key,
+                    data=BytesIO(data),
+                    length=len(data),
+                    content_type=content_type
+                )
+            elif file_path is not None:
+                # Upload from file path
+                self.client.fput_object(
+                    bucket_name=bucket,
+                    object_name=object_key,
+                    file_path=file_path,
+                    content_type=content_type
+                )
+            else:
+                raise ValueError("Either file_path or data must be provided")
             return object_key
         except S3Error as e:
             raise Exception(f"Failed to upload audio: {e}")

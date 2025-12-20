@@ -1,214 +1,284 @@
-"""Analysis service for AI-powered speech evaluation."""
+"""Analysis service for AI-powered speech evaluation with SSE streaming."""
 
 import asyncio
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+import tempfile
+import os
+import uuid
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Callable, Awaitable
+from pydub import AudioSegment
 
-from app.config import settings
-from app.models import Recording, AnalysisResult, Question
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import QuestionRepository, RecordingRepository, AnalysisResultRepository
 from app.services.storage_service import storage_service
-from app.services.ai.asr import transcribe_audio, transcribe_audio_openai, segment_audio_by_chunks
+from app.services.ai.asr import transcribe_audio_openai_from_bytes, segment_audio_by_chunks_from_bytes
 from app.services.ai.llm import (
-    generate_report, 
     chunk_transcript_by_content,
-    analyze_full_audio,
-    analyze_chunk_audio,
-    parse_global_evaluation_to_json,
     analyze_full_audio_unified,
     analyze_chunk_audio_unified,
     ToeflReportV2,
     FullTranscript,
     ChunkInfo
 )
+from app.schemas.sse import SSEStepEvent, SSECompletedEvent, SSEErrorEvent
 
 
-# Create a separate engine for background tasks
-bg_engine = create_async_engine(settings.DATABASE_URL, echo=False)
-bg_session_factory = async_sessionmaker(bg_engine, class_=AsyncSession, expire_on_commit=False)
+# Type alias for SSE event callback
+SSECallback = Callable[[str], Awaitable[None]]
 
 
-async def run_analysis_task(analysis_id: int, recording_id: int):
-    """
-    Optimized workflow with content-aware chunking and Python-calculated scores.
+@dataclass
+class AudioFile:
+    """Audio file data from upload."""
+    data: bytes
+    filename: str
+    content_type: str
     
-    Flow:
-    1. Whisper ASR (sequential)
-    2. Content chunking (sequential)
-    3. Audio segmentation (sequential)
-    4. All audio analysis in parallel
-    5. Parse + Python calculate
-    6. Merge and save
+    @property
+    def extension(self) -> str:
+        """Get file extension from filename or content_type."""
+        if self.filename and '.' in self.filename:
+            return self.filename.rsplit('.', 1)[-1].lower()
+        # Fallback to content_type
+        type_map = {
+            'audio/webm': 'webm',
+            'audio/mp4': 'mp4',
+            'audio/mpeg': 'mp3',
+            'audio/ogg': 'ogg',
+            'audio/wav': 'wav',
+        }
+        return type_map.get(self.content_type, 'webm')
+
+
+async def run_streaming_analysis(
+    db: AsyncSession,
+    audio_file: AudioFile,
+    question_id: str,
+    send_event: SSECallback
+) -> None:
     """
-    async with bg_session_factory() as db:
-        try:
-            # Update status to processing
-            await update_analysis_status(db, analysis_id, "processing")
-            
-            # Get recording and question info
-            rec_result = await db.execute(
-                select(Recording).where(Recording.id == recording_id)
+    Run the complete analysis workflow with SSE progress events.
+    
+    This function handles the entire flow:
+    1. Upload audio to storage (convert to MP3 for storage)
+    2. Transcribe speech (use original format directly - Whisper supports WebM)
+    3. AI analysis (chunking + parallel analysis)
+    4. Generate and save report
+    
+    Args:
+        db: Database session
+        audio_file: Audio file with data, filename and content_type
+        question_id: The question ID being answered
+        send_event: Async callback to send SSE events to client
+    """
+    recording = None
+    analysis = None
+    mp3_data = None
+    
+    try:
+        # ========== STEP 1: UPLOADING ==========
+        
+        # Verify question exists
+        question = await QuestionRepository.get_by_id(db, question_id)
+        if not question:
+            raise ValueError(f"Question {question_id} not found")
+        
+        await send_event(SSEStepEvent(type="uploading", status="start").to_sse())
+        
+        # Convert audio to MP3 for storage (in background while we proceed)
+        mp3_data = await convert_audio_to_mp3(audio_file.data)
+        
+        # Generate unique object key
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        unique_id = str(uuid.uuid4())[:8]
+        object_key = f"recordings/{question_id}/{timestamp}_{unique_id}.mp3"
+        
+        # Upload MP3 to MinIO
+        await storage_service.upload_audio(
+            bucket=storage_service.bucket_recordings,
+            object_key=object_key,
+            data=mp3_data,
+            content_type="audio/mpeg"
+        )
+        
+        # Create recording record using repository
+        recording = await RecordingRepository.create(
+            db, question_id=question_id, audio_url=object_key
+        )
+        
+        # Create analysis record using repository
+        analysis = await AnalysisResultRepository.create(
+            db, recording_id=recording.id, status="processing"
+        )
+        
+        await db.commit()
+        
+        await send_event(SSEStepEvent(type="uploading", status="completed").to_sse())
+        
+        # ========== STEP 2: TRANSCRIBING ==========
+        await send_event(SSEStepEvent(type="transcribing", status="start").to_sse())
+        
+        # Use original audio directly for Whisper (supports WebM, MP4, etc.)
+        # This avoids the quality loss from re-encoding
+        transcript_data = await transcribe_audio_openai_from_bytes(
+            audio_file.data, 
+            filename=audio_file.filename
+        )
+        
+        await send_event(SSEStepEvent(type="transcribing", status="completed").to_sse())
+        
+        # ========== STEP 3: ANALYZING ==========
+        await send_event(SSEStepEvent(type="analyzing", status="start").to_sse())
+        
+        question_instruction = question.instruction if question else ""
+        
+        # Content-based chunking
+        chunk_structure = await chunk_transcript_by_content(
+            transcript_data, question_instruction
+        )
+        
+        # Audio segmentation - in-memory only (not stored to MinIO)
+        chunk_audio_list = segment_audio_by_chunks_from_bytes(
+            mp3_data, chunk_structure["chunks"]
+        )
+        
+        # Get presigned URL for full audio (needed for global analysis)
+        full_audio_url = storage_service.get_presigned_url(
+            bucket=storage_service.bucket_recordings,
+            object_key=object_key
+        )
+        
+        # Parallel AI analysis
+        full_audio_task = asyncio.create_task(
+            analyze_full_audio_unified(full_audio_url, question_instruction)
+        )
+        
+        chunk_tasks = []
+        for i, chunk_info in enumerate(chunk_structure["chunks"]):
+            # Use in-memory chunk audio bytes directly
+            task = asyncio.create_task(
+                analyze_chunk_audio_unified(
+                    chunk_audio_list[i],
+                    chunk_info["text"],
+                    chunk_info["chunk_type"]
+                )
             )
-            recording = rec_result.scalar_one_or_none()
-            
-            if not recording:
-                raise Exception(f"Recording {recording_id} not found")
-            
-            q_result = await db.execute(
-                select(Question).where(Question.question_id == recording.question_id)
+            chunk_tasks.append(task)
+        
+        # Wait for all analyses
+        results = await asyncio.gather(full_audio_task, *chunk_tasks)
+        global_evaluation = results[0]
+        chunk_feedbacks = results[1:]
+        
+        await send_event(SSEStepEvent(type="analyzing", status="completed").to_sse())
+        
+        # ========== STEP 4: GENERATING REPORT ==========
+        await send_event(SSEStepEvent(type="generating", status="start").to_sse())
+        
+        # Build chunks with time_range (frontend uses this to play from original audio)
+        chunks = []
+        for i, chunk_info in enumerate(chunk_structure["chunks"]):
+            chunks.append(
+                ChunkInfo(
+                    chunk_id=i,
+                    chunk_type=chunk_info["chunk_type"],
+                    time_range=[chunk_info["start"], chunk_info["end"]],
+                    text=chunk_info["text"],
+                    feedback_structured=chunk_feedbacks[i]
+                )
             )
-            question = q_result.scalar_one_or_none()
-            
-            # Get presigned URL for audio
-            audio_url = storage_service.get_presigned_url(
-                bucket=storage_service.bucket_recordings,
-                object_key=recording.audio_url
-            )
-            
-            # Check if using OpenAI
-            if settings.OPENAI_API_KEY:
-                # ===== NEW V2 WORKFLOW: Content-Aware Chunking =====
-                
-                # STEP 1: Whisper ASR
-                transcript_data = await transcribe_audio_openai(audio_url)
-                
-                # STEP 2: Content-Based Chunking
-                question_instruction = question.instruction if question else ""
-                chunk_structure = await chunk_transcript_by_content(
-                    transcript_data, question_instruction
-                )
-                
-                # STEP 3: Audio Segmentation with pydub
-                chunk_object_keys = await segment_audio_by_chunks(
-                    audio_url, chunk_structure["chunks"], recording_id
-                )
-                
-                # STEP 4: All Audio Analysis in Parallel (Gemini direct JSON)
-                # Create task for full audio analysis
-                full_audio_task = asyncio.create_task(
-                    analyze_full_audio_unified(audio_url, question_instruction)
-                )
-                
-                # Create tasks for all chunk analyses
-                chunk_tasks = []
-                for i, chunk_info in enumerate(chunk_structure["chunks"]):
-                    chunk_audio_url = storage_service.get_presigned_url(
-                        bucket=storage_service.bucket_recordings,
-                        object_key=chunk_object_keys[i]
-                    )
-                    task = asyncio.create_task(
-                        analyze_chunk_audio_unified(
-                            chunk_audio_url, 
-                            chunk_info["text"], 
-                            chunk_info["chunk_type"]
-                        )
-                    )
-                    chunk_tasks.append(task)
-                
-                # Wait for all audio analyses to complete
-                results = await asyncio.gather(full_audio_task, *chunk_tasks)
-                global_evaluation = results[0]  # Already GlobalEvaluation object
-                chunk_feedbacks = results[1:]
-                
-                # Step 5 removed - global_evaluation is already in final format
-                
-                # STEP 6: Build Final Report
-                chunks = []
-                for i, chunk_info in enumerate(chunk_structure["chunks"]):
-                    # Convert MinIO object key to presigned URL (valid for 24 hours)
-                    chunk_audio_presigned_url = storage_service.get_presigned_url(
-                        bucket=storage_service.bucket_recordings,
-                        object_key=chunk_object_keys[i]
-                    )
-                    
-                    chunks.append(
-                        ChunkInfo(
-                            chunk_id=i,
-                            chunk_type=chunk_info["chunk_type"],
-                            time_range=[chunk_info["start"], chunk_info["end"]],
-                            text=chunk_info["text"],
-                            audio_url=chunk_audio_presigned_url,
-                            feedback_structured=chunk_feedbacks[i]
-                        )
-                    )
-                
-                final_report = ToeflReportV2(
-                    global_evaluation=global_evaluation,
-                    full_transcript=FullTranscript(
-                        text=transcript_data["text"],
-                        segments=transcript_data["segments"]
-                    ),
-                    chunks=chunks
-                )
-                
-                # Save to database
-                await update_analysis_result_json(
-                    db, analysis_id, final_report.model_dump()
-                )
-                
-            else:
-                # ----------------------------------------
-                # LEGACY: Volcengine / Mock Workflow
-                # ----------------------------------------
-                
-                transcript = await transcribe_audio(audio_url)
-                question_instruction = question.instruction if question else ""
-                
-                report_markdown = await generate_report(
-                    audio_url=audio_url,
-                    transcript=transcript,
-                    question_instruction=question_instruction
-                )
-                
-                await update_analysis_result(db, analysis_id, report_markdown)
-            
-        except Exception as e:
-            # Mark as failed
-            await update_analysis_error(db, analysis_id, str(e))
-            raise
-
-
-async def update_analysis_status(db: AsyncSession, analysis_id: int, status: str):
-    """Update analysis status."""
-    result = await db.execute(
-        select(AnalysisResult).where(AnalysisResult.id == analysis_id)
-    )
-    analysis = result.scalar_one_or_none()
-    if analysis:
-        analysis.status = status
+        
+        # Build final report
+        final_report = ToeflReportV2(
+            global_evaluation=global_evaluation,
+            full_transcript=FullTranscript(
+                text=transcript_data["text"],
+                segments=transcript_data["segments"]
+            ),
+            chunks=chunks
+        )
+        
+        report_dict = final_report.model_dump()
+        
+        # Save to database using repository
+        await AnalysisResultRepository.update_completed(db, analysis, report_dict)
         await db.commit()
+        
+        await send_event(SSEStepEvent(type="generating", status="completed").to_sse())
+        
+        # ========== COMPLETED ==========
+        await send_event(SSECompletedEvent(report=report_dict).to_sse())
+        
+    except Exception as e:
+        # Rollback any failed transaction first
+        await db.rollback()
+        
+        # Determine which step failed based on current state
+        error_step = None
+        if recording is None:
+            error_step = "uploading"
+        elif analysis is None:
+            error_step = "uploading"
+        else:
+            error_step = "analyzing"
+        
+        # Update analysis status if it exists
+        if analysis:
+            try:
+                # Re-fetch the analysis object after rollback
+                analysis_obj = await AnalysisResultRepository.get_by_id(db, analysis.id)
+                if analysis_obj:
+                    await AnalysisResultRepository.update_failed(db, analysis_obj, str(e))
+                    await db.commit()
+            except Exception:
+                # If updating status fails, just log and continue
+                pass
+        
+        # Send error event
+        await send_event(SSEErrorEvent(
+            message=str(e),
+            step=error_step
+        ).to_sse())
 
 
-async def update_analysis_result(db: AsyncSession, analysis_id: int, report_markdown: str):
-    """Update analysis with completed result (Markdown only)."""
-    result = await db.execute(
-        select(AnalysisResult).where(AnalysisResult.id == analysis_id)
-    )
-    analysis = result.scalar_one_or_none()
-    if analysis:
-        analysis.status = "completed"
-        analysis.report_markdown = report_markdown
-        await db.commit()
+async def convert_audio_to_mp3(audio_data: bytes) -> bytes:
+    """
+    Convert audio data (WebM/MP4/OGG) to MP3 format.
+    
+    Args:
+        audio_data: Raw audio bytes from browser
+        
+    Returns:
+        MP3 audio bytes
+    """
+    # Run in thread pool to avoid blocking
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _convert_audio_sync, audio_data)
 
 
-async def update_analysis_result_json(db: AsyncSession, analysis_id: int, report_json: dict):
-    """Update analysis with JSON report only."""
-    result = await db.execute(
-        select(AnalysisResult).where(AnalysisResult.id == analysis_id)
-    )
-    analysis = result.scalar_one_or_none()
-    if analysis:
-        analysis.report_json = report_json
-        analysis.status = "completed"
-        await db.commit()
-
-
-async def update_analysis_error(db: AsyncSession, analysis_id: int, error_message: str):
-    """Update analysis with error."""
-    result = await db.execute(
-        select(AnalysisResult).where(AnalysisResult.id == analysis_id)
-    )
-    analysis = result.scalar_one_or_none()
-    if analysis:
-        analysis.status = "failed"
-        analysis.error_message = error_message
-        await db.commit()
+def _convert_audio_sync(audio_data: bytes) -> bytes:
+    """Synchronous audio conversion helper."""
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".tmp") as temp_input:
+        temp_input.write(audio_data)
+        temp_input_path = temp_input.name
+    
+    temp_output_path = None
+    try:
+        # Load audio with pydub (auto-detects format)
+        audio_segment = AudioSegment.from_file(temp_input_path)
+        
+        # Export as MP3
+        temp_output_path = temp_input_path.replace('.tmp', '.mp3')
+        audio_segment.export(temp_output_path, format="mp3")
+        
+        # Read MP3 data
+        with open(temp_output_path, 'rb') as mp3_file:
+            return mp3_file.read()
+    finally:
+        # Clean up temp files
+        if os.path.exists(temp_input_path):
+            os.remove(temp_input_path)
+        if temp_output_path and os.path.exists(temp_output_path):
+            os.remove(temp_output_path)
