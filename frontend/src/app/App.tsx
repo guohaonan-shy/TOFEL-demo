@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Routes, Route, useParams, useNavigate, Navigate } from 'react-router-dom';
+import { Routes, Route, useParams, useNavigate, Navigate, useSearchParams } from 'react-router-dom';
 import { ChevronRight, AlertCircle, ChevronUp } from 'lucide-react';
 
 // API and Hooks
 import { 
   fetchQuestion, 
-  submitAnalysisWithSSE, 
+  submitAnalysisWithSSE,
+  getRecordingReport,
   type Question, 
   type AnalysisResponse,
   type SSEEvent,
@@ -53,6 +54,7 @@ const QuestionPage = () => {
   // Get question ID and step from URL path
   const { questionId, step } = useParams<{ questionId: string; step?: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   
   // Map URL step to internal step type
   const getStepFromUrl = (): StepType => {
@@ -67,11 +69,29 @@ const QuestionPage = () => {
   // Practice phase (internal to practice step): 'listening' -> 'preparing' -> 'recording'
   const [practicePhase, setPracticePhase] = useState<PracticePhase>('listening');
   
-  // Navigate to new step via URL
-  const navigateToStep = (newStep: StepType) => {
+  // Recording ID and Audio URL (for report page persistence)
+  // In dev mode, default to recording_id=12 for UI debugging without API calls
+  const DEV_DEFAULT_RECORDING_ID = 12;
+  const [recordingId, setRecordingId] = useState<number | null>(() => {
+    const id = searchParams.get('recording_id');
+    if (id) return parseInt(id, 10);
+    // In dev mode on report page, use default recording_id for debugging
+    if (DEV_SKIP_MIC_CHECK && getStepFromUrl() === 'report') {
+      return DEV_DEFAULT_RECORDING_ID;
+    }
+    return null;
+  });
+  const [serverAudioUrl, setServerAudioUrl] = useState<string | null>(null);
+  
+  // Navigate to new step via URL (preserves recording_id when navigating to report)
+  const navigateToStep = (newStep: StepType, newRecordingId?: number) => {
     setCurrentStep(newStep);
     if (newStep === 'detail') {
       navigate(`/questions/${questionId}`);
+    } else if (newStep === 'report' && (newRecordingId || recordingId)) {
+      // Include recording_id in URL for report page persistence
+      const rid = newRecordingId || recordingId;
+      navigate(`/questions/${questionId}/${newStep}?recording_id=${rid}`);
     } else {
       navigate(`/questions/${questionId}/${newStep}`);
     }
@@ -91,6 +111,8 @@ const QuestionPage = () => {
   const [audioProgress, setAudioProgress] = useState(0);
   const [audioDuration, setAudioDuration] = useState(45); // Actual recording duration
   const recordingPlayerRef = useRef<HTMLAudioElement | null>(null);
+  
+  // In dev mode, don't use mock audio - serverAudioUrl will be fetched from API
   const recordingBlobUrlRef = useRef<string | null>(null);
   
   // P4.5 Analysis Progress State - AI Tutor style labels
@@ -115,6 +137,9 @@ const QuestionPage = () => {
   // Backend Integration State
   const [currentQuestion, setCurrentQuestion] = useState<Question | null>(null);
   const [isLoadingQuestion, setIsLoadingQuestion] = useState(false);
+  
+  // In dev mode, don't use mock report - let useEffect fetch real data from API using DEV_DEFAULT_RECORDING_ID
+  // This allows testing the full report page with real data from database
   const [analysisReport, setAnalysisReport] = useState<AnalysisResponse | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
   
@@ -153,6 +178,46 @@ const QuestionPage = () => {
     };
     loadQuestion();
   }, [questionId]);
+
+  // P2: Fetch report when refreshing report page with recording_id
+  // In dev mode, uses DEV_DEFAULT_RECORDING_ID if no URL param is present
+  useEffect(() => {
+    const urlRecordingId = searchParams.get('recording_id');
+    const effectiveRecordingId = urlRecordingId ? parseInt(urlRecordingId, 10) : recordingId;
+    
+    if (currentStep === 'report' && effectiveRecordingId && !analysisReport) {
+      console.log('[useEffect] Fetching report for recording_id:', effectiveRecordingId);
+      
+      const fetchReport = async () => {
+        try {
+          const reportData = await getRecordingReport(effectiveRecordingId);
+          
+          if (reportData.status === 'completed' && reportData.report) {
+            setRecordingId(effectiveRecordingId);
+            setServerAudioUrl(reportData.audio_url);
+            setAnalysisReport({
+              task_id: effectiveRecordingId,
+              status: 'completed',
+              report_markdown: null,
+              report_json: reportData.report,
+              error_message: null,
+              created_at: reportData.created_at
+            });
+          } else if (reportData.status === 'failed') {
+            setApiError(reportData.error_message || 'Analysis failed');
+          } else {
+            // Still processing, show loading state
+            console.log('Report still processing:', reportData.status);
+          }
+        } catch (error) {
+          console.error('Failed to fetch report:', error);
+          setApiError('Failed to load report. Please try again.');
+        }
+      };
+      
+      fetchReport();
+    }
+  }, [currentStep, searchParams, analysisReport, recordingId]);
 
   // Pre-warm microphone when countdown is about to end (5 seconds left)
   useEffect(() => {
@@ -227,7 +292,12 @@ const QuestionPage = () => {
         error_message: null,
         created_at: new Date().toISOString()
       });
-      setTimeout(() => navigateToStep('report'), 800);
+      
+      // Save recording_id and audio_url from server
+      setRecordingId(event.recording_id);
+      setServerAudioUrl(event.audio_url);
+      
+      setTimeout(() => navigateToStep('report', event.recording_id), 800);
     } else if (event.type === 'error') {
       setApiError(event.message);
       navigateToStep('confirmation');
@@ -538,7 +608,9 @@ const QuestionPage = () => {
                 segments: [{ start: 0, end: 3, text: 'I believe that taking a gap year is beneficial.' }]
               },
               chunks: []
-            }
+            },
+            recording_id: 0,
+            audio_url: ''
           });
         }
       }, 400);
@@ -763,6 +835,7 @@ const QuestionPage = () => {
             expandedSentenceId={expandedSentenceId}
             setExpandedSentenceId={setExpandedSentenceId}
             onBackToHome={backToHome}
+            recordingBlobUrl={serverAudioUrl || recordingBlobUrlRef.current}
           />
         );
       
