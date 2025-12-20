@@ -13,7 +13,7 @@ async def transcribe_audio_openai(audio_url: str) -> dict:
     Transcribe audio using OpenAI Whisper API.
     
     Args:
-        audio_url: URL to the audio file (can be local or remote)
+        audio_url: URL to the MP3 audio file (already converted at upload)
         
     Returns:
         dict: {
@@ -29,7 +29,7 @@ async def transcribe_audio_openai(audio_url: str) -> dict:
         
     client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
     
-    # Download audio to temp file
+    # Download MP3 audio to temp file
     async with httpx.AsyncClient() as http_client:
         response = await http_client.get(audio_url)
         response.raise_for_status()
@@ -114,7 +114,7 @@ async def segment_audio_by_chunks(
     Segment audio using pydub and upload to MinIO.
     
     Args:
-        audio_url: Presigned URL to original recording
+        audio_url: Presigned URL to MP3 recording (already converted at upload)
         chunks: List of chunk dicts with start/end times
         recording_id: Recording ID for organizing storage
     
@@ -123,26 +123,20 @@ async def segment_audio_by_chunks(
     """
     from app.services.storage_service import storage_service
     
-    # Download audio
+    # Download MP3 audio
     async with httpx.AsyncClient() as client:
         response = await client.get(audio_url)
         response.raise_for_status()
         audio_bytes = response.content
     
     # Save to temp file for pydub
-    # Note: Frontend uploads webm format, so we need to handle that
-    with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as temp_file:
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
         temp_file.write(audio_bytes)
         temp_path = temp_file.name
     
     try:
-        # Load audio with pydub - let it auto-detect format or try webm
-        try:
-            audio = AudioSegment.from_file(temp_path)
-        except Exception as e:
-            # If auto-detect fails, try explicitly with webm
-            print(f"Auto-detect failed, trying webm: {e}")
-            audio = AudioSegment.from_file(temp_path, format="webm")
+        # Load MP3 audio with pydub
+        audio = AudioSegment.from_file(temp_path, format="mp3")
         
         object_keys = []
         for i, chunk in enumerate(chunks):

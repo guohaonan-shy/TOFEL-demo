@@ -10,11 +10,12 @@ from app.services.storage_service import storage_service
 from app.services.ai.asr import transcribe_audio, transcribe_audio_openai, segment_audio_by_chunks
 from app.services.ai.llm import (
     generate_report, 
-    generate_report_openai,
     chunk_transcript_by_content,
     analyze_full_audio,
     analyze_chunk_audio,
     parse_global_evaluation_to_json,
+    analyze_full_audio_unified,
+    analyze_chunk_audio_unified,
     ToeflReportV2,
     FullTranscript,
     ChunkInfo
@@ -81,10 +82,10 @@ async def run_analysis_task(analysis_id: int, recording_id: int):
                     audio_url, chunk_structure["chunks"], recording_id
                 )
                 
-                # STEP 4: All Audio Analysis in Parallel
+                # STEP 4: All Audio Analysis in Parallel (Gemini direct JSON)
                 # Create task for full audio analysis
                 full_audio_task = asyncio.create_task(
-                    analyze_full_audio(audio_url, question_instruction)
+                    analyze_full_audio_unified(audio_url, question_instruction)
                 )
                 
                 # Create tasks for all chunk analyses
@@ -95,7 +96,7 @@ async def run_analysis_task(analysis_id: int, recording_id: int):
                         object_key=chunk_object_keys[i]
                     )
                     task = asyncio.create_task(
-                        analyze_chunk_audio(
+                        analyze_chunk_audio_unified(
                             chunk_audio_url, 
                             chunk_info["text"], 
                             chunk_info["chunk_type"]
@@ -105,14 +106,10 @@ async def run_analysis_task(analysis_id: int, recording_id: int):
                 
                 # Wait for all audio analyses to complete
                 results = await asyncio.gather(full_audio_task, *chunk_tasks)
-                global_text = results[0]
+                global_evaluation = results[0]  # Already GlobalEvaluation object
                 chunk_feedbacks = results[1:]
                 
-                # STEP 5: Parse + Python Calculate
-                global_evaluation = await parse_global_evaluation_to_json(
-                    global_text, transcript_data["text"]
-                )
-                # total_score and level calculated in parse function
+                # Step 5 removed - global_evaluation is already in final format
                 
                 # STEP 6: Build Final Report
                 chunks = []
@@ -130,7 +127,7 @@ async def run_analysis_task(analysis_id: int, recording_id: int):
                             time_range=[chunk_info["start"], chunk_info["end"]],
                             text=chunk_info["text"],
                             audio_url=chunk_audio_presigned_url,
-                            feedback=chunk_feedbacks[i]
+                            feedback_structured=chunk_feedbacks[i]
                         )
                     )
                 

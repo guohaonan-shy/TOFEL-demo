@@ -48,13 +48,52 @@ export interface FullTranscript {
   }>;
 }
 
+// Structured Feedback Interfaces
+export interface PronunciationIssue {
+  word: string;
+  your_pronunciation?: string;
+  correct_pronunciation: string;
+  tip: string;
+  timestamp?: number;
+}
+
+export interface GrammarIssue {
+  original: string;
+  corrected: string;
+  explanation: string;
+  error_type: string;
+}
+
+export interface ExpressionSuggestion {
+  original: string;
+  improved: string;
+  reason: string;
+}
+
+export interface ActionableTip {
+  category: string;
+  tip: string;
+}
+
+export interface ChunkFeedbackStructured {
+  summary: string;
+  pronunciation_issues: PronunciationIssue[];
+  pronunciation_score?: number;
+  grammar_issues: GrammarIssue[];
+  expression_suggestions: ExpressionSuggestion[];
+  fluency_notes?: string;
+  content_notes?: string;
+  actionable_tips: ActionableTip[];
+  strengths: string[];
+}
+
 export interface ChunkAnalysis {
   chunk_id: number;
   chunk_type: string;  // "opening_statement" | "viewpoint"
   time_range: [number, number];
   text: string;
   audio_url: string;
-  feedback: string;  // Markdown text
+  feedback_structured: ChunkFeedbackStructured;  // Changed from feedback: string
 }
 
 export interface ReportJSONV2 {

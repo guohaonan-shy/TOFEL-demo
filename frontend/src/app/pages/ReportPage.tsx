@@ -1,104 +1,19 @@
-import React from 'react';
+import React, { useState } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { 
-  AlertCircle, CheckCircle2, RefreshCcw, 
-  Star, Sparkles, Zap, ChevronDown 
+  AlertCircle, RefreshCcw, 
+  Sparkles, ChevronDown, ChevronUp,
+  Volume2, BookOpen
 } from 'lucide-react';
-import type { AnalysisResponse } from '../../services/api';
-
-// Sentence Card Component
-interface SentenceCardProps {
-  sentence: {
-    original_text: string;
-    native_version?: string;
-    evaluation: string;
-    grammar_feedback: string;
-    expression_feedback: string;
-    suggestion_feedback: string;
-  };
-  index: number;
-  isExpanded: boolean;
-  onToggleExpand: (index: number | null) => void;
-}
-
-const SentenceCard: React.FC<SentenceCardProps> = ({ 
-  sentence, 
-  index, 
-  isExpanded,
-  onToggleExpand,
-}) => {
-  const isGood = sentence.evaluation.includes('优秀');
-  
-  return (
-    <div className={`group transition-all ${isExpanded ? 'bg-blue-50/30' : 'hover:bg-gray-50'}`}>
-      <div className="p-5 cursor-pointer" onClick={() => onToggleExpand(isExpanded ? null : index)}>
-        <div className="flex items-start gap-4">
-          {/* Icon */}
-          <div className="mt-1.5 shrink-0">
-            {isGood ? 
-              <CheckCircle2 size={18} className="text-green-500" /> : 
-              <Zap size={18} className="text-blue-500" />
-            }
-          </div>
-          
-          {/* Original Text */}
-          <div className="flex-1">
-            <p className="text-lg leading-relaxed text-gray-800 font-medium">
-              {sentence.original_text}
-            </p>
-            
-            {/* Expandable Feedback */}
-            {isExpanded && (
-              <div className="mt-4 animate-in fade-in duration-300">
-                {sentence.native_version && (
-                  <div className="bg-white rounded-xl border border-blue-100 p-5 shadow-sm mb-3">
-                    <div className="flex items-start gap-4 mb-3">
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white shrink-0">
-                        <Star size={14} fill="currentColor" />
-                      </div>
-                      <div className="flex-1">
-                        <div className="text-xs font-bold text-blue-600 uppercase mb-1">
-                          Native Speaker Version
-                        </div>
-                        <p className="text-gray-900 text-lg font-serif leading-relaxed">
-                          {sentence.native_version}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                
-                {/* Feedback Details */}
-                <div className="space-y-3 pl-12">
-                  <div>
-                    <div className="text-xs font-bold text-blue-600 mb-1">语法：</div>
-                    <div className="text-sm text-gray-700">{sentence.grammar_feedback}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs font-bold text-green-600 mb-1">表达：</div>
-                    <div className="text-sm text-gray-700">{sentence.expression_feedback}</div>
-                  </div>
-                  <div className="bg-indigo-50 p-3 rounded-lg">
-                    <div className="text-xs font-bold text-indigo-600 mb-1 flex items-center gap-1">
-                      <Star size={12} className="fill-indigo-200" />
-                      建议：
-                    </div>
-                    <div className="text-sm text-indigo-700">{sentence.suggestion_feedback}</div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-          
-          {/* Chevron */}
-          <ChevronDown 
-            size={20} 
-            className={`transition-transform ${isExpanded ? 'rotate-180' : ''} text-gray-300`}
-          />
-        </div>
-      </div>
-    </div>
-  );
-};
+import type { AnalysisResponse, ChunkAnalysis, ReportJSONV2 } from '../../services/api';
+import {
+  PronunciationSection,
+  GrammarSection,
+  ExpressionSection,
+  NotesSection,
+  TipsSection,
+  StrengthsSection
+} from '../components/feedback';
 
 // Report Page Props
 interface ReportPageProps {
@@ -132,7 +47,147 @@ export const ReportPage: React.FC<ReportPageProps> = ({
     );
   }
   
-  const report = analysisReport.report_json;
+  const report = analysisReport.report_json as ReportJSONV2;
+  
+  // State for chunk expansion and audio playback
+  const [expandedChunkId, setExpandedChunkId] = useState<number | null>(null);
+  const [currentChunkAudio, setCurrentChunkAudio] = useState<HTMLAudioElement | null>(null);
+  
+  // Extract data from V2 structure
+  const totalScore = report.global_evaluation.total_score;
+  const level = report.global_evaluation.level;
+  const deliveryScore = report.global_evaluation.score_breakdown.delivery;
+  const languageScore = report.global_evaluation.score_breakdown.language_use;
+  const topicScore = report.global_evaluation.score_breakdown.topic_development;
+  const overallSummary = report.global_evaluation.overall_summary;
+  
+  // Chunk handlers (V2)
+  const toggleChunk = (chunkId: number) => {
+    setExpandedChunkId(prev => prev === chunkId ? null : chunkId);
+  };
+  
+  const playChunkAudio = async (chunk: ChunkAnalysis) => {
+    try {
+      if (currentChunkAudio) {
+        currentChunkAudio.pause();
+        currentChunkAudio.currentTime = 0;
+      }
+      
+      const audio = new Audio(chunk.audio_url);
+      setCurrentChunkAudio(audio);
+      
+      audio.addEventListener('ended', () => {
+        setCurrentChunkAudio(null);
+      });
+      
+      await audio.play();
+    } catch (error) {
+      console.error('Failed to play chunk audio:', error);
+    }
+  };
+  
+  // ChunkCard Component
+  const ChunkCard: React.FC<{chunk: ChunkAnalysis}> = ({ chunk }) => {
+    const chunkTypeLabels: Record<string, string> = {
+      'opening_statement': '开头语',
+      'viewpoint': `观点 ${chunk.chunk_id}`
+    };
+    
+    const chunkTypeColors: Record<string, string> = {
+      'opening_statement': 'bg-purple-100 text-purple-700 border-purple-200',
+      'viewpoint': 'bg-blue-100 text-blue-700 border-blue-200'
+    };
+    
+    const isExpanded = expandedChunkId === chunk.chunk_id;
+
+    return (
+      <div className="bg-white rounded-xl border-2 border-gray-200 overflow-hidden hover:border-blue-300 transition-all">
+        <div className="p-4 bg-gray-50 border-b border-gray-200">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className={`px-3 py-1 rounded-full text-sm font-medium border ${chunkTypeColors[chunk.chunk_type] || chunkTypeColors.viewpoint}`}>
+                {chunkTypeLabels[chunk.chunk_type] || `段落 ${chunk.chunk_id + 1}`}
+              </span>
+              <span className="text-sm text-gray-500">
+                {chunk.time_range[0].toFixed(1)}s - {chunk.time_range[1].toFixed(1)}s
+              </span>
+            </div>
+            
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => playChunkAudio(chunk)}
+                className="p-2 rounded-lg bg-blue-500 text-white hover:bg-blue-600 transition-colors"
+                title="播放此段音频"
+              >
+                <Volume2 className="w-4 h-4" />
+              </button>
+              
+              <button
+                onClick={() => toggleChunk(chunk.chunk_id)}
+                className="p-2 rounded-lg hover:bg-gray-200 transition-colors"
+              >
+                {isExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-4 bg-blue-50 border-b border-blue-100">
+          <p className="text-gray-800 leading-relaxed">
+            {chunk.text}
+          </p>
+        </div>
+
+        {isExpanded && (
+          <div className="p-6 bg-white space-y-6">
+            {/* Overall Summary */}
+            <div className="pb-4 border-b border-gray-200">
+              <div className="flex items-center gap-2 mb-2">
+                <Sparkles className="w-5 h-5 text-blue-600" />
+                <h4 className="font-semibold text-gray-900">整体评价</h4>
+              </div>
+              <p className="text-gray-700 leading-relaxed">{chunk.feedback_structured.summary}</p>
+            </div>
+
+            {/* Pronunciation Issues */}
+            {chunk.feedback_structured.pronunciation_issues && chunk.feedback_structured.pronunciation_issues.length > 0 && (
+              <PronunciationSection issues={chunk.feedback_structured.pronunciation_issues} />
+            )}
+
+            {/* Grammar Issues */}
+            {chunk.feedback_structured.grammar_issues.length > 0 && (
+              <GrammarSection issues={chunk.feedback_structured.grammar_issues} />
+            )}
+
+            {/* Expression Suggestions */}
+            {chunk.feedback_structured.expression_suggestions.length > 0 && (
+              <ExpressionSection suggestions={chunk.feedback_structured.expression_suggestions} />
+            )}
+
+            {/* Fluency Notes */}
+            {chunk.feedback_structured.fluency_notes && (
+              <NotesSection title="流利度评价" content={chunk.feedback_structured.fluency_notes} />
+            )}
+
+            {/* Content Notes */}
+            {chunk.feedback_structured.content_notes && (
+              <NotesSection title="内容逻辑" content={chunk.feedback_structured.content_notes} />
+            )}
+
+            {/* Actionable Tips */}
+            {chunk.feedback_structured.actionable_tips.length > 0 && (
+              <TipsSection tips={chunk.feedback_structured.actionable_tips} />
+            )}
+
+            {/* Strengths */}
+            {chunk.feedback_structured.strengths.length > 0 && (
+              <StrengthsSection strengths={chunk.feedback_structured.strengths} />
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
   
   return (
     <div className="w-full max-w-5xl mx-auto h-full overflow-y-auto pb-24">
@@ -141,7 +196,7 @@ export const ReportPage: React.FC<ReportPageProps> = ({
         
         {/* Score Card */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border lg:col-span-1">
-          <div className="text-gray-400 text-xs font-bold uppercase mb-6">ETS Estimated Score</div>
+          <div className="text-gray-400 text-xs font-bold uppercase mb-6">ETS 预估分数</div>
           <div className="relative mb-6 flex justify-center">
             <svg className="w-36 h-36 transform -rotate-90">
               <circle cx="72" cy="72" r="64" stroke="#f1f5f9" strokeWidth="8" fill="transparent" />
@@ -150,14 +205,14 @@ export const ReportPage: React.FC<ReportPageProps> = ({
                 stroke="#3b82f6" 
                 strokeWidth="8" 
                 fill="transparent"
-                strokeDasharray={`${(report.total_score/30)*402} 402`}
+                strokeDasharray={`${(totalScore/30)*402} 402`}
                 strokeLinecap="round"
               />
             </svg>
             <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <span className="text-5xl font-bold text-gray-900">{report.total_score}</span>
+              <span className="text-5xl font-bold text-gray-900">{totalScore}</span>
               <span className="text-xs text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded mt-1 uppercase">
-                {report.level}
+                {level}
               </span>
             </div>
           </div>
@@ -165,16 +220,16 @@ export const ReportPage: React.FC<ReportPageProps> = ({
           {/* Component Scores */}
           <div className="flex justify-between gap-2 text-center text-xs">
             <div className="flex-1 bg-gray-50 py-2 rounded-lg border">
-              <div className="text-gray-400 text-[10px]">Delivery</div>
-              <div className="font-bold text-blue-600">{report.delivery_score}/10</div>
+              <div className="text-gray-400 text-[10px]">表达</div>
+              <div className="font-bold text-blue-600">{deliveryScore}/10</div>
             </div>
             <div className="flex-1 bg-gray-50 py-2 rounded-lg border">
-              <div className="text-gray-400 text-[10px]">Language</div>
-              <div className="font-bold text-green-600">{report.language_score}/10</div>
+              <div className="text-gray-400 text-[10px]">语言</div>
+              <div className="font-bold text-green-600">{languageScore}/10</div>
             </div>
             <div className="flex-1 bg-gray-50 py-2 rounded-lg border">
-              <div className="text-gray-400 text-[10px]">Topic</div>
-              <div className="font-bold text-purple-600">{report.topic_score}/10</div>
+              <div className="text-gray-400 text-[10px]">主题</div>
+              <div className="font-bold text-purple-600">{topicScore}/10</div>
             </div>
           </div>
         </div>
@@ -186,50 +241,49 @@ export const ReportPage: React.FC<ReportPageProps> = ({
               <Sparkles className="text-yellow-300" fill="currentColor" size={24} />
             </div>
             <div>
-              <h3 className="text-xs font-bold text-blue-200 uppercase tracking-widest mb-3">AI Summary</h3>
+              <h3 className="text-xs font-bold text-blue-200 uppercase tracking-widest mb-3">AI 总结</h3>
               <p className="text-white font-medium leading-relaxed text-xl">
-                {report.overall_summary}
+                {overallSummary}
               </p>
             </div>
           </div>
         </div>
       </div>
       
-      {/* Interactive Sentence Analysis */}
-      <div className="bg-white rounded-2xl shadow-sm border mb-8">
-        <div className="p-6 border-b bg-gray-50/50">
-          <h3 className="font-bold text-gray-800 text-lg">📝 逐句分析</h3>
-          <p className="text-sm text-gray-500 mt-1">点击句子展开详细反馈</p>
+      {/* Global Detailed Feedback */}
+      {report.global_evaluation.detailed_feedback && (
+        <div className="mb-6 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl p-6 border border-blue-100">
+          <div className="flex items-start gap-3">
+            <Sparkles className="w-6 h-6 text-indigo-600 mt-1 flex-shrink-0" />
+            <div className="flex-1">
+              <h3 className="text-lg font-semibold text-gray-900 mb-3">详细评价</h3>
+              <div className="prose prose-sm max-w-none text-gray-600">
+                <ReactMarkdown>{report.global_evaluation.detailed_feedback}</ReactMarkdown>
+              </div>
+            </div>
+          </div>
         </div>
-        
-        <div className="divide-y">
-          {report.sentence_analyses.map((sentence: any, idx: number) => (
-            <SentenceCard 
-              key={idx} 
-              sentence={sentence} 
-              index={idx}
-              isExpanded={expandedSentenceId === idx}
-              onToggleExpand={setExpandedSentenceId}
-            />
-          ))}
-        </div>
-      </div>
+      )}
       
-      {/* Actionable Tips */}
-      <div className="bg-blue-50 rounded-2xl p-6 border border-blue-100 mb-8">
-        <h3 className="text-lg font-bold text-blue-900 mb-4 flex items-center gap-2">
-          <Star className="text-blue-600" size={20} />
-          🎯 行动建议
-        </h3>
-        <ul className="space-y-3">
-          {report.actionable_tips.map((tip: string, i: number) => (
-            <li key={i} className="flex gap-3">
-              <span className="text-blue-600 font-bold">{i + 1}.</span>
-              <span className="text-gray-700">{tip}</span>
-            </li>
-          ))}
-        </ul>
-      </div>
+      {/* Chunk-based Analysis */}
+      {report.chunks && report.chunks.length > 0 && (
+        <div className="mb-8">
+          <div className="flex items-center gap-2 mb-4">
+            <BookOpen className="w-5 h-5 text-gray-700" />
+            <h3 className="text-lg font-semibold text-gray-900">逐段分析</h3>
+            <span className="text-sm text-gray-500">
+              ({report.chunks.length} 个段落)
+            </span>
+          </div>
+
+          <div className="space-y-4">
+            {report.chunks.map((chunk) => (
+              <ChunkCard key={chunk.chunk_id} chunk={chunk} />
+            ))}
+          </div>
+        </div>
+      )}
+      
       
       {/* Practice Again Button */}
       <div className="fixed bottom-6 left-0 right-0 flex justify-center pointer-events-none z-20">
