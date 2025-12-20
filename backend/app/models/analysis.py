@@ -1,8 +1,9 @@
-"""Analysis result model."""
+"""Analysis result model and repository."""
 
 from datetime import datetime
-from sqlalchemy import Integer, String, Text, DateTime, ForeignKey, JSON
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import Integer, String, Text, DateTime, ForeignKey, JSON, select
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import Base
 
@@ -45,11 +46,57 @@ class AnalysisResult(Base):
         nullable=False
     )
     
-    # Relationships
-    recording: Mapped["Recording"] = relationship(
-        "Recording", 
-        back_populates="analysis_result"
-    )
-    
     def __repr__(self) -> str:
         return f"<AnalysisResult {self.id} status={self.status}>"
+
+
+class AnalysisResultRepository:
+    """Repository for AnalysisResult entity database operations."""
+    
+    @staticmethod
+    async def create(db: AsyncSession, recording_id: int, status: str = "processing") -> AnalysisResult:
+        """Create a new analysis result."""
+        analysis = AnalysisResult(
+            recording_id=recording_id,
+            status=status
+        )
+        db.add(analysis)
+        await db.flush()
+        await db.refresh(analysis)
+        return analysis
+    
+    @staticmethod
+    async def get_by_id(db: AsyncSession, analysis_id: int) -> AnalysisResult | None:
+        """Get an analysis result by ID."""
+        result = await db.execute(
+            select(AnalysisResult).where(AnalysisResult.id == analysis_id)
+        )
+        return result.scalar_one_or_none()
+    
+    @staticmethod
+    async def get_by_recording_id(db: AsyncSession, recording_id: int) -> AnalysisResult | None:
+        """Get analysis result by recording ID."""
+        result = await db.execute(
+            select(AnalysisResult).where(AnalysisResult.recording_id == recording_id)
+        )
+        return result.scalar_one_or_none()
+    
+    @staticmethod
+    async def update_completed(db: AsyncSession, analysis: AnalysisResult, report_json: dict) -> None:
+        """Update analysis result as completed with report."""
+        analysis.status = "completed"
+        analysis.report_json = report_json
+        await db.flush()
+    
+    @staticmethod
+    async def update_failed(db: AsyncSession, analysis: AnalysisResult, error_message: str) -> None:
+        """Update analysis result as failed with error message."""
+        analysis.status = "failed"
+        analysis.error_message = error_message
+        await db.flush()
+    
+    @staticmethod
+    async def delete(db: AsyncSession, analysis: AnalysisResult) -> None:
+        """Delete an analysis result."""
+        await db.delete(analysis)
+        await db.flush()

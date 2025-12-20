@@ -1,8 +1,9 @@
-"""Question model."""
+"""Question model and repository."""
 
 from datetime import datetime
-from sqlalchemy import String, Text, DateTime, JSON
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import String, Text, DateTime, JSON, select
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import Base
 
@@ -32,12 +33,23 @@ class Question(Base):
         nullable=False
     )
     
-    # Relationships
-    recordings: Mapped[list["Recording"]] = relationship(
-        "Recording", 
-        back_populates="question",
-        cascade="all, delete-orphan"
-    )
-    
     def __repr__(self) -> str:
         return f"<Question {self.question_id}>"
+
+
+class QuestionRepository:
+    """Repository for Question entity database operations."""
+    
+    @staticmethod
+    async def get_by_id(db: AsyncSession, question_id: str) -> Question | None:
+        """Get a question by ID."""
+        result = await db.execute(
+            select(Question).where(Question.question_id == question_id)
+        )
+        return result.scalar_one_or_none()
+    
+    @staticmethod
+    async def get_all(db: AsyncSession) -> list[Question]:
+        """Get all questions."""
+        result = await db.execute(select(Question))
+        return list(result.scalars().all())

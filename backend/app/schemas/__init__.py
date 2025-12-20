@@ -11,9 +11,12 @@ from app.schemas.recording import (
     AudioUrlResponse,
 )
 from app.schemas.analysis import (
-    AnalysisCreate,
     AnalysisResponse,
-    AnalysisStatusResponse,
+)
+from app.schemas.sse import (
+    SSEStepEvent,
+    SSECompletedEvent,
+    SSEErrorEvent,
 )
 
 __all__ = [
@@ -23,7 +26,8 @@ __all__ = [
     "RecordingCreate",
     "RecordingResponse",
     "AudioUrlResponse",
-    "AnalysisCreate",
     "AnalysisResponse",
-    "AnalysisStatusResponse",
+    "SSEStepEvent",
+    "SSECompletedEvent",
+    "SSEErrorEvent",
 ]
