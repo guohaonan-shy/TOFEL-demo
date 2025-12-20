@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { 
   AlertCircle, RefreshCcw, 
   Sparkles, ChevronDown, ChevronUp,
-  Volume2, BookOpen
+  Volume2, BookOpen, Play, Pause
 } from 'lucide-react';
 import type { AnalysisResponse, ChunkAnalysis, ReportJSONV2 } from '../../services/api';
 import {
@@ -21,6 +21,7 @@ interface ReportPageProps {
   expandedSentenceId: number | null;
   setExpandedSentenceId: (id: number | null) => void;
   onBackToHome: () => void;
+  recordingBlobUrl: string | null;
 }
 
 export const ReportPage: React.FC<ReportPageProps> = ({
@@ -28,6 +29,7 @@ export const ReportPage: React.FC<ReportPageProps> = ({
   expandedSentenceId,
   setExpandedSentenceId,
   onBackToHome,
+  recordingBlobUrl,
 }) => {
   if (!analysisReport?.report_json) {
     return (
@@ -49,9 +51,111 @@ export const ReportPage: React.FC<ReportPageProps> = ({
   
   const report = analysisReport.report_json as ReportJSONV2;
   
-  // State for chunk expansion and audio playback
+  // State for chunk expansion
   const [expandedChunkId, setExpandedChunkId] = useState<number | null>(null);
-  const [currentChunkAudio, setCurrentChunkAudio] = useState<HTMLAudioElement | null>(null);
+  
+  // Recording player state
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [activeChunkId, setActiveChunkId] = useState<number | null>(null);
+  
+  // Calculate expected duration from chunks (for mock mode fallback)
+  const chunkBasedDuration = report.chunks?.length > 0 
+    ? Math.max(...report.chunks.map(c => c.time_range[1])) 
+    : 45;
+  
+  // Initialize audio element
+  useEffect(() => {
+    if (recordingBlobUrl) {
+      const audio = new Audio(recordingBlobUrl);
+      audio.preload = 'metadata';
+      
+      audio.addEventListener('loadedmetadata', () => {
+        if (isFinite(audio.duration) && audio.duration > 1) {
+          setDuration(audio.duration);
+        } else {
+          // Use chunk-based duration for mock/short audio
+          setDuration(chunkBasedDuration);
+        }
+      });
+      
+      audio.addEventListener('timeupdate', () => {
+        setCurrentTime(audio.currentTime);
+        // Find active chunk based on current time
+        if (report.chunks) {
+          const activeChunk = report.chunks.find(
+            chunk => audio.currentTime >= chunk.time_range[0] && audio.currentTime < chunk.time_range[1]
+          );
+          setActiveChunkId(activeChunk?.chunk_id ?? null);
+        }
+      });
+      
+      audio.addEventListener('ended', () => {
+        setIsPlaying(false);
+        setActiveChunkId(null);
+      });
+      
+      audioRef.current = audio;
+      
+      return () => {
+        audio.pause();
+        audio.src = '';
+      };
+    } else if (report.chunks?.length > 0) {
+      // No audio URL but have chunks - use chunk duration for UI preview
+      setDuration(chunkBasedDuration);
+    }
+  }, [recordingBlobUrl, report.chunks, chunkBasedDuration]);
+  
+  // Play/pause toggle
+  const togglePlay = async () => {
+    if (!audioRef.current) return;
+    
+    if (isPlaying) {
+      audioRef.current.pause();
+      setIsPlaying(false);
+    } else {
+      try {
+        await audioRef.current.play();
+        setIsPlaying(true);
+      } catch (error) {
+        console.error('Failed to play audio:', error);
+      }
+    }
+  };
+  
+  // Seek to time
+  const seekTo = (time: number) => {
+    if (audioRef.current) {
+      audioRef.current.currentTime = time;
+      setCurrentTime(time);
+    }
+  };
+  
+  // Play chunk from its start time
+  const playChunkFromTime = async (chunk: ChunkAnalysis) => {
+    if (!audioRef.current) return;
+    
+    audioRef.current.currentTime = chunk.time_range[0];
+    setCurrentTime(chunk.time_range[0]);
+    
+    try {
+      await audioRef.current.play();
+      setIsPlaying(true);
+    } catch (error) {
+      console.error('Failed to play chunk:', error);
+    }
+  };
+  
+  // Format time helper
+  const formatTime = (seconds: number) => {
+    if (!isFinite(seconds) || isNaN(seconds)) return '0:00';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
   
   // Extract data from V2 structure
   const totalScore = report.global_evaluation.total_score;
@@ -66,69 +170,71 @@ export const ReportPage: React.FC<ReportPageProps> = ({
     setExpandedChunkId(prev => prev === chunkId ? null : chunkId);
   };
   
-  const playChunkAudio = async (chunk: ChunkAnalysis) => {
-    try {
-      if (currentChunkAudio) {
-        currentChunkAudio.pause();
-        currentChunkAudio.currentTime = 0;
-      }
-      
-      const audio = new Audio(chunk.audio_url);
-      setCurrentChunkAudio(audio);
-      
-      audio.addEventListener('ended', () => {
-        setCurrentChunkAudio(null);
-      });
-      
-      await audio.play();
-    } catch (error) {
-      console.error('Failed to play chunk audio:', error);
-    }
-  };
-  
-  // ChunkCard Component
-  const ChunkCard: React.FC<{chunk: ChunkAnalysis}> = ({ chunk }) => {
-    const chunkTypeLabels: Record<string, string> = {
+  // Chunk type labels and colors
+  const getChunkTypeLabel = (chunk: ChunkAnalysis) => {
+    const labels: Record<string, string> = {
       'opening_statement': '开头语',
       'viewpoint': `观点 ${chunk.chunk_id}`
     };
-    
-    const chunkTypeColors: Record<string, string> = {
+    return labels[chunk.chunk_type] || `段落 ${chunk.chunk_id + 1}`;
+  };
+  
+  const getChunkTypeColor = (chunkType: string) => {
+    const colors: Record<string, string> = {
       'opening_statement': 'bg-purple-100 text-purple-700 border-purple-200',
       'viewpoint': 'bg-blue-100 text-blue-700 border-blue-200'
     };
-    
+    return colors[chunkType] || colors.viewpoint;
+  };
+
+  // Render a single chunk card inline
+  const renderChunkCard = (chunk: ChunkAnalysis) => {
     const isExpanded = expandedChunkId === chunk.chunk_id;
+    const isActive = activeChunkId === chunk.chunk_id;
+
+    // Handle card click - play this chunk
+    const handleCardClick = () => {
+      playChunkFromTime(chunk);
+    };
 
     return (
-      <div className="bg-white rounded-xl border-2 border-gray-200 overflow-hidden hover:border-blue-300 transition-all">
-        <div className="p-4 bg-gray-50 border-b border-gray-200">
+      <div 
+        key={chunk.chunk_id}
+        className={`bg-white rounded-xl border-2 overflow-hidden transition-all cursor-pointer ${
+          isActive ? 'border-blue-500 ring-2 ring-blue-200' : 'border-gray-200 hover:border-blue-300 hover:shadow-md'
+        }`}
+        onClick={handleCardClick}
+      >
+        <div className={`p-4 border-b ${isActive ? 'bg-blue-50 border-blue-200' : 'bg-gray-50 border-gray-200'}`}>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <span className={`px-3 py-1 rounded-full text-sm font-medium border ${chunkTypeColors[chunk.chunk_type] || chunkTypeColors.viewpoint}`}>
-                {chunkTypeLabels[chunk.chunk_type] || `段落 ${chunk.chunk_id + 1}`}
+              <span className={`px-3 py-1 rounded-full text-sm font-medium border ${getChunkTypeColor(chunk.chunk_type)}`}>
+                {getChunkTypeLabel(chunk)}
               </span>
               <span className="text-sm text-gray-500">
-                {chunk.time_range[0].toFixed(1)}s - {chunk.time_range[1].toFixed(1)}s
+                {formatTime(chunk.time_range[0])} - {formatTime(chunk.time_range[1])}
               </span>
+              {/* Play indicator for active chunk */}
+              {isActive && isPlaying && (
+                <span className="flex items-center gap-1 text-green-600 text-sm font-medium">
+                  <Volume2 className="w-4 h-4 animate-pulse" />
+                  播放中
+                </span>
+              )}
             </div>
             
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => playChunkAudio(chunk)}
-                className="p-2 rounded-lg bg-blue-500 text-white hover:bg-blue-600 transition-colors"
-                title="播放此段音频"
-              >
-                <Volume2 className="w-4 h-4" />
-              </button>
-              
-              <button
-                onClick={() => toggleChunk(chunk.chunk_id)}
-                className="p-2 rounded-lg hover:bg-gray-200 transition-colors"
-              >
-                {isExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-              </button>
-            </div>
+            {/* Expand/Collapse button only */}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleChunk(chunk.chunk_id);
+              }}
+              className="p-2 rounded-lg hover:bg-gray-200 transition-colors"
+              title={isExpanded ? '收起详情' : '展开详情'}
+            >
+              {isExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+            </button>
           </div>
         </div>
 
@@ -276,10 +382,94 @@ export const ReportPage: React.FC<ReportPageProps> = ({
             </span>
           </div>
 
+          {/* Recording Player - show when we have chunks (uses chunk times for duration if no real audio) */}
+          <div className="bg-white rounded-xl border border-gray-200 p-4 mb-4 shadow-sm">
+            <div className="flex items-center gap-4">
+              {/* Play/Pause Button */}
+              <button
+                onClick={togglePlay}
+                disabled={!recordingBlobUrl}
+                className={`w-12 h-12 rounded-full text-white flex items-center justify-center transition-colors shadow-md flex-shrink-0 ${
+                  recordingBlobUrl 
+                    ? 'bg-blue-600 hover:bg-blue-700 cursor-pointer' 
+                    : 'bg-gray-400 cursor-not-allowed'
+                }`}
+                title={!recordingBlobUrl ? '无可用音频' : undefined}
+              >
+                {isPlaying ? <Pause size={20} /> : <Play size={20} className="ml-0.5" />}
+              </button>
+              
+              {/* Progress Section */}
+              <div className="flex-1 min-w-0">
+                <div className="text-xs text-gray-500 font-medium mb-1.5 uppercase tracking-wide">
+                  Your Recording
+                  {!recordingBlobUrl && <span className="text-amber-500 ml-2">(预览模式)</span>}
+                </div>
+                
+                {/* Progress Bar with Chunk Markers */}
+                <div className="relative h-2 bg-gray-100 rounded-full overflow-visible">
+                  {/* Chunk markers */}
+                  {report.chunks.map((chunk) => (
+                    <div
+                      key={chunk.chunk_id}
+                      className={`absolute top-0 h-full cursor-pointer transition-colors ${
+                        activeChunkId === chunk.chunk_id ? 'bg-blue-300' : 'bg-blue-100 hover:bg-blue-200'
+                      }`}
+                      style={{
+                        left: `${(chunk.time_range[0] / duration) * 100}%`,
+                        width: `${((chunk.time_range[1] - chunk.time_range[0]) / duration) * 100}%`,
+                      }}
+                      onClick={() => {
+                        if (recordingBlobUrl) {
+                          seekTo(chunk.time_range[0]);
+                        } else {
+                          // In preview mode, just highlight the chunk
+                          setActiveChunkId(chunk.chunk_id);
+                          setCurrentTime(chunk.time_range[0]);
+                        }
+                      }}
+                      title={`${chunk.time_range[0].toFixed(1)}s - ${chunk.time_range[1].toFixed(1)}s`}
+                    />
+                  ))}
+                  
+                  {/* Progress indicator */}
+                  <div 
+                    className="absolute top-0 h-full bg-blue-600 rounded-full transition-all duration-100"
+                    style={{ width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%` }}
+                  />
+                  
+                  {/* Clickable seek overlay */}
+                  <div 
+                    className="absolute inset-0 cursor-pointer"
+                    onClick={(e) => {
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const percent = (e.clientX - rect.left) / rect.width;
+                      const newTime = percent * duration;
+                      if (recordingBlobUrl) {
+                        seekTo(newTime);
+                      } else {
+                        // In preview mode, just update visual state
+                        setCurrentTime(newTime);
+                        const activeChunk = report.chunks?.find(
+                          chunk => newTime >= chunk.time_range[0] && newTime < chunk.time_range[1]
+                        );
+                        setActiveChunkId(activeChunk?.chunk_id ?? null);
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+              
+              {/* Time Display */}
+              <div className="text-sm font-mono text-gray-600 flex-shrink-0">
+                <span className="text-blue-600 font-semibold">{formatTime(currentTime)}</span>
+                <span className="text-gray-400"> / {formatTime(duration)}</span>
+              </div>
+            </div>
+          </div>
+
           <div className="space-y-4">
-            {report.chunks.map((chunk) => (
-              <ChunkCard key={chunk.chunk_id} chunk={chunk} />
-            ))}
+            {report.chunks.map((chunk) => renderChunkCard(chunk))}
           </div>
         </div>
       )}

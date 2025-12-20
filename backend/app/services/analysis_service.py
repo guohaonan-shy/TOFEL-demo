@@ -209,7 +209,12 @@ async def run_streaming_analysis(
         await send_event(SSEStepEvent(type="generating", status="completed").to_sse())
         
         # ========== COMPLETED ==========
-        await send_event(SSECompletedEvent(report=report_dict).to_sse())
+        # Reuse the presigned URL from step 3 (full_audio_url) for frontend playback
+        await send_event(SSECompletedEvent(
+            report=report_dict,
+            recording_id=recording.id,
+            audio_url=full_audio_url
+        ).to_sse())
         
     except Exception as e:
         # Rollback any failed transaction first

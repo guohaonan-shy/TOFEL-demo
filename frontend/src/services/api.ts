@@ -175,6 +175,8 @@ export interface SSEStepEvent {
 export interface SSECompletedEvent {
   type: 'completed';
   report: ReportJSONV2;
+  recording_id: number;
+  audio_url: string;
 }
 
 export interface SSEErrorEvent {
@@ -282,6 +284,34 @@ export async function getAnalysisResult(taskId: number): Promise<AnalysisRespons
   
   if (!response.ok) {
     throw new Error(`Failed to get analysis result: ${response.statusText}`);
+  }
+  
+  return response.json();
+}
+
+/**
+ * Recording report response interface
+ */
+export interface RecordingReportResponse {
+  recording_id: number;
+  question_id: string;
+  audio_url: string;
+  report: ReportJSONV2 | null;
+  status: string;
+  error_message: string | null;
+  created_at: string;
+}
+
+/**
+ * Get recording report by recording ID
+ * Returns the analysis report and presigned audio URL
+ * @param recordingId - The ID of the recording
+ */
+export async function getRecordingReport(recordingId: number): Promise<RecordingReportResponse> {
+  const response = await fetch(`${API_BASE_URL}/recordings/${recordingId}/report`);
+  
+  if (!response.ok) {
+    throw new Error(`Failed to get recording report: ${response.statusText}`);
   }
   
   return response.json();
