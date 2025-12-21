@@ -1,6 +1,6 @@
 -- Migration: 001_init_schema
 -- Description: Initialize database schema
--- Created: 2025-12-16
+-- Created: 2025-12-21
 
 -- Questions table for TOEFL speaking prompts
 CREATE TABLE IF NOT EXISTS questions (
@@ -25,15 +25,11 @@ CREATE TABLE IF NOT EXISTS analysis_results (
     id SERIAL PRIMARY KEY,
     recording_id INTEGER NOT NULL UNIQUE REFERENCES recordings(id),
     report_markdown TEXT,
+    report_json JSONB,
     status VARCHAR(20) NOT NULL,
     error_message TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
--- Migration tracking table
-CREATE TABLE IF NOT EXISTS _migrations (
-    id SERIAL PRIMARY KEY,
-    name VARCHAR(255) NOT NULL UNIQUE,
-    type VARCHAR(20) NOT NULL,  -- 'postgres' or 'minio'
-    applied_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
+-- Add comment for report_json column
+COMMENT ON COLUMN analysis_results.report_json IS 'Structured JSON report from AI analysis';
