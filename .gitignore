@@ -39,6 +39,7 @@ env/
 # Docker volumes
 backend/data/postgres/
 backend/data/minio/
+backend/data/
 
 # IDE
 .vscode/
