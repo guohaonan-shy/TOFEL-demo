@@ -70,8 +70,8 @@ const QuestionPage = () => {
   const [practicePhase, setPracticePhase] = useState<PracticePhase>('listening');
   
   // Recording ID and Audio URL (for report page persistence)
-  // In dev mode, default to recording_id=12 for UI debugging without API calls
-  const DEV_DEFAULT_RECORDING_ID = 12;
+  // In dev mode, default to recording_id=1 for UI debugging without API calls
+  const DEV_DEFAULT_RECORDING_ID = 1;
   const [recordingId, setRecordingId] = useState<number | null>(() => {
     const id = searchParams.get('recording_id');
     if (id) return parseInt(id, 10);

@@ -36,10 +36,9 @@ env/
 *.sqlite
 *.sqlite3
 
-# Docker volumes
-backend/data/postgres/
-backend/data/minio/
-backend/data/
+# Supabase local
+.branches/
+.temp/
 
 # IDE
 .vscode/

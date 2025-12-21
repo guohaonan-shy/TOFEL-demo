@@ -6,6 +6,7 @@ AI驱动的托福口语练习平台，提供基于内容分块的智能反馈和
 ![Python](https://img.shields.io/badge/Python-3.10%2B-green)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.124%2B-teal)
 ![React](https://img.shields.io/badge/React-18-blue)
+![Supabase](https://img.shields.io/badge/Supabase-Local%20%2B%20Cloud-3ECF8E)
 
 ## ✨ 核心功能
 
@@ -16,38 +17,53 @@ AI驱动的托福口语练习平台，提供基于内容分块的智能反馈和
 - 📈 **ETS评分** - 基于Delivery、Language Use、Topic Development三维度评分(0-30分)
 - 🔄 **灵活切换** - 支持 Gemini/OpenAI 自由切换，自动降级保障
 
+## 🏗️ 技术架构
+
+**基础设施 (Supabase):**
+- PostgreSQL (数据库)
+- Supabase Storage (对象存储 - S3 兼容)
+- Supabase Studio (统一管理界面)
+
+**后端:**
+- FastAPI + SQLAlchemy (异步ORM)
+- OpenAI Whisper (语音转录)
+- Google Gemini 2.5 Pro (AI音频分析 - 推荐) ⭐️
+- GPT-4o Audio Preview (AI音频分析 - 降级选项)
+- pydub + ffmpeg (音频处理)
+
+**前端:**
+- React 18 + TypeScript
+- Vite (构建工具)
+- Tailwind CSS
+- Lucide React (图标)
+
 ## 🚀 快速启动
 
 ### 前置要求
 
-- **Python 3.10+**
-  ```bash
-  # 检查 Python 版本
-  python3 --version
-  
-  # ⚠️ 如果版本低于 3.10，需使用指定版本
-  # macOS/Linux: python3.10 或 python3.11 或 python3.12
-  ```
+- **Python 3.10+** 和 **uv** (Python 包管理器)
 - **Node.js 18+**
-- **Docker & Docker Compose**
-- **OpenAI API Key** (必需，用于 Whisper 转录)
-  - 获取地址: https://platform.openai.com/api-keys
-- **Gemini API Key** (可选，用于音频分析，推荐)
-  - 获取地址: https://ai.google.dev/
-- **ffmpeg** (用于音频处理)
+- **Docker Desktop** (用于运行 Supabase 本地环境)
+- **Supabase CLI** - [安装指南](https://supabase.com/docs/guides/cli)
+- **ffmpeg** (音频处理)
+- **API Keys:**
+  - OpenAI API Key (必需，用于 Whisper 转录) - https://platform.openai.com/api-keys
+  - Gemini API Key (推荐，用于音频分析) - https://ai.google.dev/
 
-### 1. 启动 Docker 服务
+### 安装 Supabase CLI
 
 ```bash
-cd backend
-docker-compose up -d
+# macOS
+brew install supabase/tap/supabase
 
-# 验证服务运行
-docker ps
-# 应该看到: toefl-postgres, toefl-minio
+# 或使用 npm
+npm install -g supabase
+
+# 验证安装
+supabase --version
 ```
 
-### 2. 安装 ffmpeg
+### 安装 ffmpeg
 
 ```bash
 # macOS
@@ -60,156 +76,166 @@ sudo apt-get install ffmpeg
 ffmpeg -version
 ```
 
-### 3. 配置后端
+---
 
-#### 方式一：手动配置（推荐新用户）
+## 📦 新成员快速开始
+
+### Step 1: 克隆项目
+
+```bash
+git clone <repo-url>
+cd TOFEL-demo
+```
+
+### Step 2: 启动 Supabase 本地环境
+
+```bash
+# 在项目根目录
+supabase start
+```
+
+首次运行需要下载 Docker 镜像，可能需要几分钟。启动成功后会显示：
+
+```
+Started supabase local development setup.
+
+         API URL: http://127.0.0.1:54321
+          DB URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      Studio URL: http://127.0.0.1:54323     ← 管理界面
+        ...
+```
+
+### Step 3: 获取 Storage 密钥
+
+```bash
+supabase status
+```
+
+找到 **Storage (S3)** 部分，复制 `Access Key` 和 `Secret Key`。
+
+### Step 4: 配置后端环境变量
 
 ```bash
 cd backend
 
-# 创建虚拟环境（使用 Python 3.10+）
-python3 -m venv .venv
-# 如果默认 Python 版本 < 3.10，使用：python3.10 -m venv .venv
-source .venv/bin/activate
+# 复制配置模板
+cp .env.example .env
+
+# 编辑 .env 文件
+```
+
+填入以下内容：
+
+```env
+# Database
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:54322/postgres
+
+# Supabase
+SUPABASE_URL=http://127.0.0.1:54321
+
+# Storage (从 supabase status 复制)
+STORAGE_ENDPOINT=http://127.0.0.1:54321/storage/v1/s3
+STORAGE_ACCESS_KEY=<your-access-key>
+STORAGE_SECRET_KEY=<your-secret-key>
+STORAGE_REGION=local
+
+# AI Services (必须填写真实的 API Key)
+OPENAI_API_KEY=sk-xxxxx
+GEMINI_API_KEY=xxxxx
+AUDIO_AI_PROVIDER=auto
+```
+
+### Step 5: 初始化 Storage
+
+```bash
+cd ../supabase
+
+# 设置环境变量
+export STORAGE_ACCESS_KEY="<your-access-key>"
+export STORAGE_SECRET_KEY="<your-secret-key>"
+
+# 安装 boto3 (如果还没有)
+pip install boto3
+
+# 运行初始化脚本（创建 buckets + 上传音频）
+python init_storage.py
+```
+
+### Step 6: 安装后端依赖并启动
+
+```bash
+cd ../backend
 
 # 安装依赖
-pip install uv
-uv pip install -e .
+uv sync
 
-# 配置环境变量
-cp .env.example .env
-# 然后编辑 .env 文件，填入你的 API Keys
-```
-
-**⚠️ 重要：编辑 `.env` 文件**
-
-打开 `backend/.env`，**必须**替换以下占位符：
-- `OPENAI_API_KEY`: 填入你的真实 OpenAI API key（必需）
-- `GEMINI_API_KEY`: 填入你的 Gemini API key（可选，推荐）
-
-不替换 API key 会导致 AI 功能无法使用（401 错误）。
-
-#### 方式二：一键初始化（自动化脚本）
-
-```bash
-cd backend
-
-# 运行初始化脚本（会自动创建虚拟环境和运行迁移）
-./migrations/setup_dev.sh
-```
-
-⚠️ **注意**：此脚本会自动管理虚拟环境。如果 `.venv` 已存在会被删除重建。
-
-### 4. 运行数据库迁移
-
-```bash
-cd backend
-
-# 如果使用方式一手动配置，需要运行迁移
-./migrations/setup_dev.sh
-# 或者直接运行迁移（不重建虚拟环境）
-source .venv/bin/activate
-uv run python migrations/migrate.py
-```
-
-### 5. 启动后端
-
-```bash
-cd backend
-source .venv/bin/activate
-python main.py
-
-# 后端运行在: http://localhost:8000
-# API 文档: http://localhost:8000/docs
-```
-
-**其他启动方式**：
-```bash
-# 使用 uvicorn 直接启动（无需激活虚拟环境）
+# 启动后端服务
 uv run uvicorn app.app:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### 6. 启动前端
+后端运行在: http://localhost:8000  
+API 文档: http://localhost:8000/docs
+
+### Step 7: 启动前端
 
 ```bash
 # 打开新终端
 cd frontend
 
-# 安装依赖（首次运行）
+# 安装依赖
 npm install
 
 # 启动开发服务器
 npm run dev
-
-# 前端运行在: http://localhost:5173
 ```
 
-> 💡 **提示**：前端默认连接 `http://localhost:8000/api/v1`  
-> 如需修改 API 地址，创建 `frontend/.env` 并设置 `VITE_API_BASE_URL`
+前端运行在: http://localhost:5173
 
-### 7. 访问应用
+### Step 8: 验证安装
 
-打开浏览器访问: **http://localhost:5173**
+1. ✅ **Supabase Studio**: http://127.0.0.1:54323
+   - Table Editor: 应该能看到 `questions`, `recordings`, `analysis_results` 表
+   - Storage: 应该能看到 `toefl-questions`, `toefl-recordings` buckets
 
-## 🔍 验证安装
+2. ✅ **后端 API**: http://localhost:8000/docs
+   - 测试 `GET /api/v1/questions` 应该返回题目列表
 
-完成上述步骤后，运行以下检查确保环境正确配置：
+3. ✅ **前端应用**: http://localhost:5173
+   - 能看到题目详情页面
+
+---
+
+## 🔄 日常开发流程
+
+### 启动服务
 
 ```bash
-# 1. 检查 Docker 容器
-docker ps
-# 应该看到: toefl-postgres 和 toefl-minio
+# 终端 1: 启动 Supabase
+supabase start
 
-# 2. 检查后端 API
-curl http://localhost:8000/api/v1/questions
-# 应该返回题目列表的 JSON
+# 终端 2: 启动后端
+cd backend
+uv run uvicorn app.app:app --reload --host 0.0.0.0 --port 8000
 
-# 3. 检查前端和 API 文档
-# 浏览器访问:
-# - http://localhost:5173 (前端应用)
-# - http://localhost:8000/docs (API 文档)
+# 终端 3: 启动前端
+cd frontend
+npm run dev
 ```
 
-✅ 如果以上检查都通过，恭喜！环境配置成功
+### 同步其他成员的数据库变更
 
-## 📊 V2 版本新特性
-
-### 内容感知分块分析
-- ✅ **智能分块**: LLM自动识别开头语、观点1、观点2
-- ✅ **音频分段**: 每个段落独立音频文件，可单独播放
-- ✅ **并行处理**: Whisper + AI音频分析同时运行，更快
-- ✅ **Python计算评分**: 确保总分和等级计算准确
-- ✅ **多AI支持**: Gemini/OpenAI 灵活切换，自动降级
-
-### 分析流程（优化版）
-```
-1. 上传转换 → 浏览器录音(WebM/MP4)转换为MP3存储
-2. Whisper转录 → 获取文本和时间戳（OpenAI）
-3. LLM内容分块 → 识别2-4个语义段落（OpenAI GPT-4o）
-4. pydub音频切分 → 从MP3创建可播放的音频段
-5. 并行音频分析 → 全局+各段落同时分析（Gemini 2.5 Pro / GPT-4o）
-   ├─ Gemini: 音频 → 直接输出JSON结构（1次调用）⚡️
-   └─ OpenAI: 音频 → 文本 → JSON解析（2次调用）
-6. Python计算评分 → total_score和level
-7. 前端展示 → 逐段分析+音频播放
+```bash
+git pull
+supabase db reset  # 重新应用所有迁移
 ```
 
-## 🏗️ 技术架构
+### 停止服务
 
-**后端:**
-- FastAPI + SQLAlchemy (异步ORM)
-- PostgreSQL (数据库)
-- MinIO (对象存储 - 所有音频存储为MP3格式)
-- OpenAI Whisper (语音转录)
-- **Google Gemini 2.5 Pro** (AI音频分析 - 推荐) ⭐️
-- GPT-4o Audio Preview (AI音频分析 - 降级选项)
-- pydub + ffmpeg (音频处理 - 上传时转换为MP3)
+```bash
+supabase stop
+```
 
-**前端:**
-- React 18 + TypeScript
-- Vite (构建工具)
-- Tailwind CSS
-- Lucide React (图标)
+---
 
 ## 📁 项目结构
 
@@ -217,274 +243,158 @@ curl http://localhost:8000/api/v1/questions
 TOFEL-demo/
 ├── backend/
 │   ├── app/
-│   │   ├── services/ai/
-│   │   │   ├── asr.py          # Whisper转录 + 音频切分
-│   │   │   └── llm.py          # Gemini/GPT-4o AI分析（统一接口）
 │   │   ├── services/
-│   │   │   ├── analysis_service.py  # 主工作流编排
-│   │   │   └── storage_service.py   # MinIO操作
-│   │   └── routers/            # API端点
-│   ├── migrations/             # 数据库迁移
-│   └── docker-compose.yml      # PostgreSQL + MinIO
+│   │   │   ├── ai/
+│   │   │   │   ├── asr.py              # Whisper转录 + 音频切分
+│   │   │   │   └── llm.py              # Gemini/GPT-4o AI分析
+│   │   │   ├── analysis_service.py     # 主工作流编排
+│   │   │   └── storage_service.py      # Supabase Storage 操作
+│   │   ├── routers/                    # API端点
+│   │   ├── models/                     # SQLAlchemy 模型
+│   │   └── schemas/                    # Pydantic 模型
+│   ├── migrations/
+│   │   └── audio/                      # 题目音频文件
+│   ├── .env.example
+│   └── pyproject.toml
 │
 ├── frontend/
 │   └── src/
-│       ├── app/App.tsx         # 主组件
-│       └── services/api.ts     # API客户端
+│       ├── app/App.tsx                 # 主组件
+│       └── services/api.ts             # API客户端
+│
+├── supabase/
+│   ├── config.toml                     # Supabase 本地配置
+│   ├── migrations/                     # 数据库迁移
+│   │   └── 20251221000001_init_schema.sql
+│   ├── seed.sql                        # 种子数据
+│   └── init_storage.py                 # Storage 初始化脚本
 │
 └── README.md
 ```
+
+---
 
 ## 🔧 配置说明
 
 ### 后端环境变量 (`backend/.env`)
 
 ```env
-# AI 服务配置
-OPENAI_API_KEY=sk-xxxxx              # OpenAI (用于 Whisper 转录，必需)
-GEMINI_API_KEY=your-gemini-key       # Google Gemini (音频分析，推荐)
+# Database (Supabase PostgreSQL)
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:54322/postgres
+
+# Supabase API
+SUPABASE_URL=http://127.0.0.1:54321
+
+# Storage (S3 兼容)
+STORAGE_ENDPOINT=http://127.0.0.1:54321/storage/v1/s3
+STORAGE_ACCESS_KEY=xxx
+STORAGE_SECRET_KEY=xxx
+STORAGE_REGION=local
+
+# Storage Buckets
+STORAGE_BUCKET_QUESTIONS=toefl-questions
+STORAGE_BUCKET_RECORDINGS=toefl-recordings
+
+# AI 服务
+OPENAI_API_KEY=sk-xxxxx              # OpenAI (Whisper 转录，必需)
+GEMINI_API_KEY=xxxxx                 # Google Gemini (音频分析，推荐)
 AUDIO_AI_PROVIDER=auto               # auto | gemini | openai
-
-# 数据库
-DATABASE_URL=postgresql+asyncpg://toefl:toefl123@localhost:5432/toefl_speaking
-
-# MinIO对象存储
-MINIO_ENDPOINT=localhost:9000
-MINIO_ACCESS_KEY=minioadmin
-MINIO_SECRET_KEY=minioadmin123
-MINIO_SECURE=false
 ```
 
 ### AI 提供商选择策略
 
-**`AUDIO_AI_PROVIDER=auto` (推荐)**
-- 如果配置了 `GEMINI_API_KEY` → 优先使用 Gemini
-- 否则使用 OpenAI GPT-4o
-- Gemini 失败时自动降级到 OpenAI
+| 配置 | 行为 |
+|------|------|
+| `auto` (推荐) | 优先 Gemini，失败时降级到 OpenAI |
+| `gemini` | 强制使用 Gemini |
+| `openai` | 强制使用 OpenAI GPT-4o |
 
-**`AUDIO_AI_PROVIDER=gemini` (强制)**
-- 强制使用 Gemini 2.5 Pro
-- 失败时如果有 OpenAI key 会降级
+### 性能对比
 
-**`AUDIO_AI_PROVIDER=openai` (强制)**
-- 强制使用 OpenAI GPT-4o Audio
-
-**性能对比:**
 | 提供商 | 速度 | 成本 | 质量 |
 |--------|------|------|------|
 | Gemini 2.5 Pro | ⚡️ 更快 | 💰 更低 | ✅ 优秀 |
 | GPT-4o Audio | 🐢 较慢 | 💰💰 较高 | ✅ 优秀 |
 
-### 前端环境变量 (`frontend/.env`)
-
-前端有默认配置，本地开发**不需要**创建 `.env` 文件。
-
-如需自定义 API 地址，可创建 `frontend/.env`：
-```env
-VITE_API_BASE_URL=http://localhost:8000/api/v1
-```
+---
 
 ## 🐛 常见问题
 
-### Python 版本问题
+### Supabase 启动失败
 
-**问题**: 依赖安装失败，提示 Python 版本不满足要求
 ```bash
-# 检查 Python 版本
-python3 --version
+# 确保 Docker Desktop 正在运行
+docker info
 
-# 如果 < 3.10，使用特定版本创建虚拟环境
-cd backend
-rm -rf .venv
-python3.10 -m venv .venv  # 或 python3.11, python3.12
-source .venv/bin/activate
-pip install uv
-uv pip install -e .
+# 重新启动 Supabase
+supabase stop
+supabase start
+```
+
+### Storage 访问失败 (NoSuchBucket)
+
+```bash
+# 运行初始化脚本创建 buckets
+cd supabase
+export STORAGE_ACCESS_KEY="xxx"
+export STORAGE_SECRET_KEY="xxx"
+python init_storage.py
 ```
 
 ### API Key 配置问题
 
-**问题**: 401 错误 "Incorrect API key provided"
 - 检查 `backend/.env` 文件
-- 确保 `OPENAI_API_KEY` 已替换为真实的 API key
-- 不要使用占位符 `sk-your-openai-key-here`
+- 确保 `OPENAI_API_KEY` 是真实的 key，不是占位符
 - 修改后需要重启后端服务
 
-### 后端启动失败
+### 后端依赖问题
 
-**问题**: `ModuleNotFoundError: No module named 'uvicorn'`
 ```bash
-# 确保虚拟环境已激活
-source .venv/bin/activate
-# 重新安装依赖
-uv pip install -e .
-```
-
-**问题**: `Address already in use` (端口 8000 被占用)
-```bash
-# 查找并停止占用端口的进程
-lsof -ti:8000 | xargs kill -9
-# 然后重新启动后端
-```
-
-**问题**: 后端反复重启
-```bash
-# 方案1: 使用更新后的 main.py (已设置 reload_dirs)
-python main.py
-
-# 方案2: 禁用自动重载
-uvicorn app.app:app --host 0.0.0.0 --port 8000
-```
-
-**问题**: `pydub` 错误或 "Decoding failed"
-```bash
-# 确保 ffmpeg 已安装
-ffmpeg -version
-# 如未安装: brew install ffmpeg (macOS)
+cd backend
+uv sync  # 重新安装依赖
 ```
 
 ### 前端启动失败
 
 ```bash
-# 清除缓存重新安装
-rm -rf node_modules package-lock.json
+cd frontend
+rm -rf node_modules
 npm install
 npm run dev
 ```
 
-### Docker 服务问题
-
-```bash
-# 重启服务
-docker-compose down
-docker-compose up -d
-
-# 查看日志
-docker-compose logs
-```
-
-### 分析失败
-
-**错误**: "Invalid mp3 format"
-- 后端已自动处理 webm → mp3 转换
-- 确保 ffmpeg 已正确安装
-
-**错误**: "Chunking failed"
-- 检查录音时长（至少10秒）
-- 查看后端日志获取详细错误信息
-
-### Gemini 相关问题
-
-**问题**: Gemini 配额超限 (429 RESOURCE_EXHAUSTED)
-```bash
-# 解决方案1: 切换到 OpenAI（系统会自动降级）
-AUDIO_AI_PROVIDER=openai
-
-# 解决方案2: 使用更高配额的 Gemini 模型
-# 修改 llm.py 中的模型名称: gemini-2.0-flash-exp → gemini-1.5-flash
-
-# 解决方案3: 等待配额重置（免费层每日配额）
-```
-
-**问题**: Gemini 返回英文反馈
-- 已修复：更新后的 prompt 强制要求中文输出
-- 重启后端服务器生效
-
-**问题**: 如何获取 Gemini API Key？
-- 访问: https://ai.google.dev/
-- 登录 Google 账号
-- 创建 API Key（免费层有配额限制）
-- 复制到 `.env` 文件中的 `GEMINI_API_KEY`
-
-## 📊 JSON 输出格式
-
-```json
-{
-  "analysis_version": "2.0",
-  "global_evaluation": {
-    "total_score": 24,
-    "score_breakdown": {
-      "delivery": 8,
-      "language_use": 8,
-      "topic_development": 8
-    },
-    "level": "Good",
-    "overall_summary": "整体表现良好...",
-    "detailed_feedback": "详细分析..."
-  },
-  "full_transcript": {
-    "text": "完整转录文本...",
-    "segments": [{"start": 0.0, "end": 2.5, "text": "..."}]
-  },
-  "chunks": [
-    {
-      "chunk_id": 0,
-      "chunk_type": "opening_statement",
-      "time_range": [0.0, 6.7],
-      "text": "Honestly, I think...",
-      "audio_url": "https://...",
-      "feedback": "markdown格式的综合反馈"
-    }
-  ]
-}
-```
-
-## 🎯 使用流程
-
-1. 打开 http://localhost:5173
-2. 选择托福口语题目
-3. 准备15秒 → 录音45秒
-4. 提交AI分析（需要20-40秒）
-5. 查看报告：
-   - 总分和等级
-   - 整体评价
-   - 逐段分析（2-4段）
-   - 点击音量图标播放该段音频
-   - 展开查看详细反馈
+---
 
 ## 🔗 有用链接
 
-- 后端API文档: http://localhost:8000/docs
-- MinIO控制台: http://localhost:9001 (minioadmin / minioadmin123)
-- PostgreSQL: localhost:5432 (toefl / toefl123)
+| 服务 | 地址 |
+|------|------|
+| 前端应用 | http://localhost:5173 |
+| 后端 API 文档 | http://localhost:8000/docs |
+| Supabase Studio | http://127.0.0.1:54323 |
+
+---
 
 ## 📝 开发注意事项
 
 - `.env` 文件不要提交到 Git
-- API Keys（OpenAI、Gemini）保密
-- 录音文件存储在 MinIO `toefl-recordings` bucket (统一为MP3格式)
-- 浏览器录音(WebM/MP4)在上传时自动转换为MP3
-- 音频分块存储在 `chunks/{recording_id}/` 路径 (MP3格式)
+- API Keys 保密
+- 数据库变更通过 `supabase/migrations/` 管理
+- 使用 `supabase db reset` 同步其他成员的数据库变更
 - 评分逻辑: ≥24=Excellent, ≥18=Good, ≥14=Fair, <14=Weak
-- **Gemini 优先**: 使用 `AUDIO_AI_PROVIDER=auto` 自动选择最优方案
-- **降级机制**: Gemini 失败会自动切换到 OpenAI，保障服务可用性
-
-## 📈 未来增强
-
-### 功能扩展
-- [ ] 用户认证和个人档案
-- [ ] 历史进度追踪
-- [ ] 更多题型（综合口语、学术讨论）
-- [ ] 发音对比训练
-- [ ] 移动端支持
-
-### AI 优化
-- [x] Gemini 音频分析集成（v2.1）
-- [x] 自动降级机制（v2.1）
-- [x] 中文反馈优化（v2.1）
-- [ ] Gemini 转录支持（替代 Whisper）
-- [ ] 智能重试策略
-- [ ] 音频文件缓存（避免重复上传）
-- [ ] 成本和性能监控
 
 ---
 
-**Version**: 2.1 (Gemini Integration)  
-**Last Updated**: December 18, 2024  
-**Built with ❤️ for TOEFL learners worldwide**
+## 🚀 部署到生产环境
 
-### 🎉 新版本亮点 (v2.1)
-- ⚡️ **Gemini 2.5 Pro 集成**: 更快的音频分析，更低的成本
-- 🔄 **智能降级**: Gemini 失败自动切换到 OpenAI，保障服务稳定
-- 🌏 **中文优化**: 强化 prompt，确保所有反馈都是中文
-- 🎯 **一键切换**: 通过配置灵活选择 AI 提供商
+1. 在 [Supabase Dashboard](https://supabase.com/dashboard) 创建项目
+2. 链接项目: `supabase link --project-ref <your-project-ref>`
+3. 推送迁移: `supabase db push`
+4. 配置生产环境的 `.env` 文件（使用云端 URL 和 Keys）
+5. 部署后端和前端应用
+
+---
+
+**Version**: 3.0 (Supabase Migration)  
+**Last Updated**: December 21, 2024  
+**Built with ❤️ for TOEFL learners worldwide**

@@ -11,16 +11,21 @@ class Settings(BaseSettings):
     APP_NAME: str = "TOEFL Speaking Backend"
     DEBUG: bool = True
     
-    # Database
-    DATABASE_URL: str = "postgresql+asyncpg://toefl:toefl123@localhost:5432/toefl_speaking"
+    # Database (Supabase PostgreSQL)
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@127.0.0.1:54322/postgres"
     
-    # MinIO
-    MINIO_ENDPOINT: str = "localhost:9000"
-    MINIO_ACCESS_KEY: str = "minioadmin"
-    MINIO_SECRET_KEY: str = "minioadmin123"
-    MINIO_SECURE: bool = False
-    MINIO_BUCKET_QUESTIONS: str = "toefl-questions"
-    MINIO_BUCKET_RECORDINGS: str = "toefl-recordings"
+    # Supabase API URL (for public URLs)
+    SUPABASE_URL: str = "http://127.0.0.1:54321"
+    
+    # Storage (S3 compatible - from `supabase status`)
+    STORAGE_ENDPOINT: str = "http://127.0.0.1:54321/storage/v1/s3"
+    STORAGE_ACCESS_KEY: str = ""  # From supabase status -> Storage (S3) -> Access Key
+    STORAGE_SECRET_KEY: str = ""  # From supabase status -> Storage (S3) -> Secret Key
+    STORAGE_REGION: str = "local"
+    
+    # Storage Buckets
+    STORAGE_BUCKET_QUESTIONS: str = "toefl-questions"
+    STORAGE_BUCKET_RECORDINGS: str = "toefl-recordings"
     
     # OpenAI
     OPENAI_API_KEY: str = ""
@@ -40,6 +45,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        extra = "ignore"
 
 
 @lru_cache

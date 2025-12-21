@@ -1,7 +1,7 @@
--- Migration: 002_seed_questions
--- Description: Seed initial question data
--- Created: 2025-12-16
+-- Seed data for TOEFL Speaking App
+-- This file runs after migrations during db reset
 
+-- Seed initial question data
 INSERT INTO questions (question_id, instruction, sos_keywords, sos_starter, audio_url) VALUES
 (
     'question_01KCH9WP8W6TZXA5QXS1BFF6AS',
