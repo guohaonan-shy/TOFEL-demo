@@ -2,6 +2,11 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Routes, Route, useParams, useNavigate, Navigate, useSearchParams } from 'react-router-dom';
 import { ChevronRight, AlertCircle, ChevronUp } from 'lucide-react';
 
+// Auth
+import { AuthProvider, useAuth } from '../contexts/AuthContext';
+import { ProtectedRoute } from './components/auth/ProtectedRoute';
+import { AuthPage } from './pages';
+
 // API and Hooks
 import { 
   fetchQuestion, 
@@ -70,11 +75,11 @@ const QuestionPage = () => {
   const [practicePhase, setPracticePhase] = useState<PracticePhase>('listening');
   
   // Recording ID and Audio URL (for report page persistence)
-  // In dev mode, default to recording_id=1 for UI debugging without API calls
-  const DEV_DEFAULT_RECORDING_ID = 1;
-  const [recordingId, setRecordingId] = useState<number | null>(() => {
+  // Recording ID is now ULID format (e.g., recording_01HGW2BBG4BV9DG8YCEXFZR8ND)
+  const DEV_DEFAULT_RECORDING_ID = 'recording_dev_placeholder';
+  const [recordingId, setRecordingId] = useState<string | null>(() => {
     const id = searchParams.get('recording_id');
-    if (id) return parseInt(id, 10);
+    if (id) return id;  // Already a string (ULID format)
     // In dev mode on report page, use default recording_id for debugging
     if (DEV_SKIP_MIC_CHECK && getStepFromUrl() === 'report') {
       return DEV_DEFAULT_RECORDING_ID;
@@ -84,7 +89,7 @@ const QuestionPage = () => {
   const [serverAudioUrl, setServerAudioUrl] = useState<string | null>(null);
   
   // Navigate to new step via URL (preserves recording_id when navigating to report)
-  const navigateToStep = (newStep: StepType, newRecordingId?: number) => {
+  const navigateToStep = (newStep: StepType, newRecordingId?: string) => {
     setCurrentStep(newStep);
     if (newStep === 'detail') {
       navigate(`/questions/${questionId}`);
@@ -183,7 +188,7 @@ const QuestionPage = () => {
   // In dev mode, uses DEV_DEFAULT_RECORDING_ID if no URL param is present
   useEffect(() => {
     const urlRecordingId = searchParams.get('recording_id');
-    const effectiveRecordingId = urlRecordingId ? parseInt(urlRecordingId, 10) : recordingId;
+    const effectiveRecordingId = urlRecordingId || recordingId;  // Already string (ULID format)
     
     if (currentStep === 'report' && effectiveRecordingId && !analysisReport) {
       console.log('[useEffect] Fetching report for recording_id:', effectiveRecordingId);
@@ -196,7 +201,7 @@ const QuestionPage = () => {
             setRecordingId(effectiveRecordingId);
             setServerAudioUrl(reportData.audio_url);
             setAnalysisReport({
-              task_id: effectiveRecordingId,
+              task_id: 0,  // Not used, just a placeholder
               status: 'completed',
               report_markdown: null,
               report_json: reportData.report,
@@ -609,7 +614,7 @@ const QuestionPage = () => {
               },
               chunks: []
             },
-            recording_id: 0,
+            recording_id: 'recording_mock_placeholder',
             audio_url: ''
           });
         }
@@ -904,16 +909,49 @@ const QuestionPage = () => {
 };
 
 // Main App with Routes
-const App = () => {
+const AppRoutes = () => {
+  const { user } = useAuth();
+  
   return (
     <Routes>
-      {/* Default redirect to default question */}
+      {/* Auth route - redirect to questions if already logged in */}
+      <Route 
+        path="/auth" 
+        element={
+          user ? <Navigate to={`/questions/${DEFAULT_QUESTION_ID}`} replace /> : <AuthPage />
+        } 
+      />
+      
+      {/* Default redirect */}
       <Route path="/" element={<Navigate to={`/questions/${DEFAULT_QUESTION_ID}`} replace />} />
       
-      {/* Question routes */}
-      <Route path="/questions/:questionId" element={<QuestionPage />} />
-      <Route path="/questions/:questionId/:step" element={<QuestionPage />} />
+      {/* Protected question routes */}
+      <Route 
+        path="/questions/:questionId" 
+        element={
+          <ProtectedRoute>
+            <QuestionPage />
+          </ProtectedRoute>
+        } 
+      />
+      <Route 
+        path="/questions/:questionId/:step" 
+        element={
+          <ProtectedRoute>
+            <QuestionPage />
+          </ProtectedRoute>
+        } 
+      />
     </Routes>
+  );
+};
+
+// Root App with Auth Provider
+const App = () => {
+  return (
+    <AuthProvider>
+      <AppRoutes />
+    </AuthProvider>
   );
 };
 

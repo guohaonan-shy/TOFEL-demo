@@ -25,7 +25,7 @@ class SSECompletedEvent(BaseModel):
     """SSE event when analysis is completed."""
     type: Literal["completed"] = "completed"
     report: dict = Field(..., description="The complete analysis report JSON")
-    recording_id: int = Field(..., description="The recording ID for fetching report later")
+    recording_id: str = Field(..., description="The recording ID (ULID format) for fetching report later")
     audio_url: str = Field(..., description="Presigned URL for the MP3 audio file")
     
     def to_sse(self) -> str:

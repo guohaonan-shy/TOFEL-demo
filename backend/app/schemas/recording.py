@@ -11,7 +11,7 @@ class RecordingCreate(BaseModel):
 
 class RecordingResponse(BaseModel):
     """Schema for recording response."""
-    id: int
+    recording_id: str = Field(..., description="Recording ID (ULID format)")
     question_id: str
     audio_url: str
     created_at: datetime
@@ -28,7 +28,7 @@ class AudioUrlResponse(BaseModel):
 
 class RecordingReportResponse(BaseModel):
     """Schema for recording report response (includes report and audio URL)."""
-    recording_id: int = Field(..., description="Recording ID")
+    recording_id: str = Field(..., description="Recording ID (ULID format)")
     question_id: str = Field(..., description="Question ID this recording belongs to")
     audio_url: str = Field(..., description="Presigned URL for audio playback (MP3)")
     report: dict | None = Field(None, description="Analysis report JSON")

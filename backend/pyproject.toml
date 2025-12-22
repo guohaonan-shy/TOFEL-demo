@@ -18,6 +18,7 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.45",
     "boto3>=1.35.0",
     "uvicorn[standard]>=0.38.0",
+    "pyjwt>=2.10.1",
 ]
 
 [tool.setuptools]

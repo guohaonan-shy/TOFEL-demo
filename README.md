@@ -148,9 +148,9 @@ AUDIO_AI_PROVIDER=auto
 ### Step 5: 初始化 Storage
 
 ```bash
-cd ../supabase
+cd supabase
 
-# 设置环境变量
+# 设置环境变量 (从 supabase status 获取)
 export STORAGE_ACCESS_KEY="<your-access-key>"
 export STORAGE_SECRET_KEY="<your-secret-key>"
 
@@ -160,6 +160,11 @@ pip install boto3
 # 运行初始化脚本（创建 buckets + 上传音频）
 python init_storage.py
 ```
+
+这会：
+- 创建 `toefl-questions` 和 `toefl-recordings` buckets
+- 上传题目音频 (`assets/questions/`)
+- 上传种子录音 (`assets/recordings/`)
 
 ### Step 6: 安装后端依赖并启动
 
@@ -194,13 +199,15 @@ npm run dev
 ### Step 8: 验证安装
 
 1. ✅ **Supabase Studio**: http://127.0.0.1:54323
-   - Table Editor: 应该能看到 `questions`, `recordings`, `analysis_results` 表
-   - Storage: 应该能看到 `toefl-questions`, `toefl-recordings` buckets
+   - **Table Editor**: 应该能看到 `questions`, `recordings`, `analysis_results` 表
+   - **Storage**: 应该能看到 `toefl-questions`, `toefl-recordings` buckets
+   - **Authentication → Users**: 应该能看到 `localtest@gmail.com` 用户
 
 2. ✅ **后端 API**: http://localhost:8000/docs
    - 测试 `GET /api/v1/questions` 应该返回题目列表
 
 3. ✅ **前端应用**: http://localhost:5173
+   - 使用 `localtest@gmail.com` / `123456` 登录
    - 能看到题目详情页面
 
 ---
@@ -224,10 +231,36 @@ npm run dev
 
 ### 同步其他成员的数据库变更
 
+当其他成员提交了数据库 schema 变更或 seed 数据更新时：
+
 ```bash
+# 1. 拉取最新代码
 git pull
-supabase db reset  # 重新应用所有迁移
+
+# 2. 重置数据库（应用所有迁移 + 导入 seed 数据）
+supabase db reset
+
+# 3. 重新初始化 Storage（上传音频文件）
+cd supabase
+export STORAGE_ACCESS_KEY="<your-access-key>"
+export STORAGE_SECRET_KEY="<your-secret-key>"
+python init_storage.py
 ```
+
+> 💡 **提示**：
+> - `supabase db reset` 会清空所有数据并重新应用 `migrations/` 和 `seed.sql`
+> - Storage 密钥可从 `supabase status` 的 **Storage (S3)** 部分获取
+> - seed.sql 已包含测试用户和示例分析报告
+
+### 测试账号
+
+重置后会自动创建测试账号：
+
+| 字段 | 值 |
+|------|-----|
+| Email | `localtest@gmail.com` |
+| Password | `123456` |
+| User ID | `a1b2c3d4-e5f6-7890-abcd-ef1234567890` |
 
 ### 停止服务
 
@@ -252,8 +285,6 @@ TOFEL-demo/
 │   │   ├── routers/                    # API端点
 │   │   ├── models/                     # SQLAlchemy 模型
 │   │   └── schemas/                    # Pydantic 模型
-│   ├── migrations/
-│   │   └── audio/                      # 题目音频文件
 │   ├── .env.example
 │   └── pyproject.toml
 │
@@ -264,9 +295,13 @@ TOFEL-demo/
 │
 ├── supabase/
 │   ├── config.toml                     # Supabase 本地配置
+│   ├── assets/                         # 静态资源文件
+│   │   ├── questions/                  # 题目音频 (question_{id}.mp3)
+│   │   └── recordings/                 # 种子录音 (recording_{id}.mp3)
 │   ├── migrations/                     # 数据库迁移
-│   │   └── 20251221000001_init_schema.sql
-│   ├── seed.sql                        # 种子数据
+│   │   ├── 20251221000001_init_schema.sql
+│   │   └── 20251222000001_add_user_id_to_recordings.sql
+│   ├── seed.sql                        # 种子数据 (用户、题目、录音、分析报告)
 │   └── init_storage.py                 # Storage 初始化脚本
 │
 └── README.md
@@ -395,6 +430,6 @@ npm run dev
 
 ---
 
-**Version**: 3.0 (Supabase Migration)  
-**Last Updated**: December 21, 2024  
+**Version**: 3.1 (User Authentication + Data Ownership)  
+**Last Updated**: December 23, 2024  
 **Built with ❤️ for TOEFL learners worldwide**
