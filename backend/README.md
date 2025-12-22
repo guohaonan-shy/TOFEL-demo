@@ -45,11 +45,11 @@ backend/
 │       ├── ai/             # AI 服务 (ASR + LLM)
 │       ├── analysis_service.py
 │       └── storage_service.py  # Supabase Storage
-├── migrations/
-│   └── audio/              # 题目音频文件
 ├── .env.example
 └── pyproject.toml
 ```
+
+> 📝 题目音频和种子录音文件已迁移到 `supabase/assets/` 目录
 
 ## 环境变量
 

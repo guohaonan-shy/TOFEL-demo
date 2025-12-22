@@ -3,10 +3,9 @@
 import asyncio
 import tempfile
 import os
-import uuid
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Callable, Awaitable
+from ulid import ULID
 from pydub import AudioSegment
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -56,7 +55,8 @@ async def run_streaming_analysis(
     db: AsyncSession,
     audio_file: AudioFile,
     question_id: str,
-    send_event: SSECallback
+    send_event: SSECallback,
+    user_id: str | None = None
 ) -> None:
     """
     Run the complete analysis workflow with SSE progress events.
@@ -72,6 +72,7 @@ async def run_streaming_analysis(
         audio_file: Audio file with data, filename and content_type
         question_id: The question ID being answered
         send_event: Async callback to send SSE events to client
+        user_id: The authenticated user's ID (from Supabase auth)
     """
     recording = None
     analysis = None
@@ -90,10 +91,12 @@ async def run_streaming_analysis(
         # Convert audio to MP3 for storage (in background while we proceed)
         mp3_data = await convert_audio_to_mp3(audio_file.data)
         
-        # Generate unique object key
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        unique_id = str(uuid.uuid4())[:8]
-        object_key = f"recordings/{question_id}/{timestamp}_{unique_id}.mp3"
+        # Generate recording_id using ULID format
+        recording_id = f"recording_{ULID()}"
+        
+        # Generate object key: recordings/{user_id}/{question_id}/{recording_id}.mp3
+        user_folder = user_id if user_id else "anonymous"
+        object_key = f"recordings/{user_folder}/{question_id}/{recording_id}.mp3"
         
         # Upload MP3 to MinIO
         await storage_service.upload_audio(
@@ -103,14 +106,22 @@ async def run_streaming_analysis(
             content_type="audio/mpeg"
         )
         
-        # Create recording record using repository
+        # Create recording record using repository (with user ownership and explicit recording_id)
         recording = await RecordingRepository.create(
-            db, question_id=question_id, audio_url=object_key
+            db, 
+            question_id=question_id, 
+            audio_url=object_key, 
+            user_id=user_id,
+            recording_id=recording_id
         )
         
-        # Create analysis record using repository
+        # Create analysis record using repository (with user and question references)
         analysis = await AnalysisResultRepository.create(
-            db, recording_id=recording.id, status="processing"
+            db, 
+            recording_id=recording.recording_id, 
+            user_id=user_id,
+            question_id=question_id,
+            status="processing"
         )
         
         await db.commit()
@@ -212,7 +223,7 @@ async def run_streaming_analysis(
         # Reuse the presigned URL from step 3 (full_audio_url) for frontend playback
         await send_event(SSECompletedEvent(
             report=report_dict,
-            recording_id=recording.id,
+            recording_id=recording.recording_id,
             audio_url=full_audio_url
         ).to_sse())
         

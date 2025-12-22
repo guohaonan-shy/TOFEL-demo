@@ -8,18 +8,20 @@ from app.database import get_db
 from app.models import Recording, AnalysisResult
 from app.schemas import RecordingResponse, AudioUrlResponse, RecordingReportResponse
 from app.services.storage_service import storage_service
+from app.auth import get_current_user, AuthenticatedUser
 
 router = APIRouter(prefix="/recordings")
 
 
 @router.get("/{recording_id}", response_model=RecordingResponse)
 async def get_recording(
-    recording_id: int,
+    recording_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Get a specific recording by ID."""
+    """Get a specific recording by ID (ULID format). Requires authentication and ownership."""
     result = await db.execute(
-        select(Recording).where(Recording.id == recording_id)
+        select(Recording).where(Recording.recording_id == recording_id)
     )
     recording = result.scalar_one_or_none()
     
@@ -29,17 +31,25 @@ async def get_recording(
             detail=f"Recording {recording_id} not found"
         )
     
+    # Check user ownership (if recording has user_id set)
+    if recording.user_id and str(recording.user_id) != current_user.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: you don't own this recording"
+        )
+    
     return RecordingResponse.model_validate(recording)
 
 
 @router.get("/{recording_id}/audio", response_model=AudioUrlResponse)
 async def get_recording_audio(
-    recording_id: int,
+    recording_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Get presigned URL for recording audio playback."""
+    """Get presigned URL for recording audio playback. Requires authentication and ownership."""
     result = await db.execute(
-        select(Recording).where(Recording.id == recording_id)
+        select(Recording).where(Recording.recording_id == recording_id)
     )
     recording = result.scalar_one_or_none()
     
@@ -47,6 +57,13 @@ async def get_recording_audio(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Recording {recording_id} not found"
+        )
+    
+    # Check user ownership (if recording has user_id set)
+    if recording.user_id and str(recording.user_id) != current_user.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: you don't own this recording"
         )
     
     presigned_url = storage_service.get_presigned_url(
@@ -59,21 +76,23 @@ async def get_recording_audio(
 
 @router.get("/{recording_id}/report", response_model=RecordingReportResponse)
 async def get_recording_report(
-    recording_id: int,
+    recording_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Get recording with its analysis report and audio URL.
+    Requires authentication and ownership.
     
     This endpoint returns:
-    - Recording metadata (id, question_id, created_at)
+    - Recording metadata (recording_id, question_id, created_at)
     - Presigned audio URL (MP3 format, supports seeking)
     - Analysis report (if completed)
     - Analysis status
     """
     # Get recording
     result = await db.execute(
-        select(Recording).where(Recording.id == recording_id)
+        select(Recording).where(Recording.recording_id == recording_id)
     )
     recording = result.scalar_one_or_none()
     
@@ -81,6 +100,13 @@ async def get_recording_report(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Recording {recording_id} not found"
+        )
+    
+    # Check user ownership (if recording has user_id set)
+    if recording.user_id and str(recording.user_id) != current_user.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: you don't own this recording"
         )
     
     # Get analysis result
@@ -96,7 +122,7 @@ async def get_recording_report(
     )
     
     return RecordingReportResponse(
-        recording_id=recording.id,
+        recording_id=recording.recording_id,
         question_id=recording.question_id,
         audio_url=presigned_url,
         report=analysis.report_json if analysis else None,
