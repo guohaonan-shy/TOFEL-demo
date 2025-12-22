@@ -329,15 +329,15 @@ export const ReportPage: React.FC<ReportPageProps> = ({
           <div className="flex justify-between gap-2 text-center text-xs">
             <div className="flex-1 bg-gray-50 py-2 rounded-lg border">
               <div className="text-gray-400 text-[10px]">表达</div>
-              <div className="font-bold text-blue-600">{deliveryScore}/10</div>
+              <div className="font-bold text-blue-600">{deliveryScore}/4</div>
             </div>
             <div className="flex-1 bg-gray-50 py-2 rounded-lg border">
               <div className="text-gray-400 text-[10px]">语言</div>
-              <div className="font-bold text-green-600">{languageScore}/10</div>
+              <div className="font-bold text-green-600">{languageScore}/4</div>
             </div>
             <div className="flex-1 bg-gray-50 py-2 rounded-lg border">
               <div className="text-gray-400 text-[10px]">主题</div>
-              <div className="font-bold text-purple-600">{topicScore}/10</div>
+              <div className="font-bold text-purple-600">{topicScore}/4</div>
             </div>
           </div>
         </div>

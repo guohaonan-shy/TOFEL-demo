@@ -28,11 +28,11 @@ export interface RecordingResponse {
 
 // V2 Interfaces for chunk-based analysis
 export interface GlobalEvaluation {
-  total_score: number;
+  total_score: number;  // 0-30 scale
   score_breakdown: {
-    delivery: number;
-    language_use: number;
-    topic_development: number;
+    delivery: number;  // 0-4.0 scale (TOEFL official)
+    language_use: number;  // 0-4.0 scale (TOEFL official)
+    topic_development: number;  // 0-4.0 scale (TOEFL official)
   };
   level: string;
   overall_summary: string;

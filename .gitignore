@@ -75,3 +75,7 @@ htmlcov/
 .DS_Store
 .AppleDouble
 .LSOverride
+
+# Local data directories
+backend/data/
+

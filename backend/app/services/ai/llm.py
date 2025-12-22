@@ -101,20 +101,20 @@ class ChunkFeedbackStructured(BaseModel):
 
 
 class GlobalEvaluationLLM(BaseModel):
-    """LLM output - only component scores (0-10 each)."""
-    delivery: int = Field(..., ge=0, le=10, description="Delivery score")
-    language_use: int = Field(..., ge=0, le=10, description="Language use score")
-    topic_development: int = Field(..., ge=0, le=10, description="Topic development score")
+    """LLM output - only component scores (0-4 each, TOEFL official scale)."""
+    delivery: float = Field(..., ge=0, le=4, description="Delivery score (0-4)")
+    language_use: float = Field(..., ge=0, le=4, description="Language use score (0-4)")
+    topic_development: float = Field(..., ge=0, le=4, description="Topic development score (0-4)")
     overall_summary: str = Field(..., description="Brief summary in Chinese")
     detailed_feedback: str = Field(..., description="Detailed analysis from audio")
 
 
 class GlobalEvaluation(BaseModel):
     """Final evaluation with Python-calculated fields."""
-    total_score: int = Field(..., ge=0, le=30, description="Sum of three scores")
-    score_breakdown: dict[str, int] = Field(
+    total_score: int = Field(..., ge=0, le=30, description="Total score (0-30 scale)")
+    score_breakdown: dict[str, float] = Field(
         ..., 
-        description="delivery, language_use, topic_development (each 0-10)"
+        description="delivery, language_use, topic_development (each 0-4.0, TOEFL official scale)"
     )
     level: str = Field(..., description="Excellent/Good/Fair/Weak based on total_score")
     overall_summary: str = Field(..., description="Brief summary in Chinese")
@@ -220,27 +220,53 @@ async def analyze_full_audio_gemini(audio_url: str, question_text: str) -> Globa
                 response_schema={
                     "type": "object",
                     "properties": {
-                        "delivery": {"type": "integer", "minimum": 0, "maximum": 10},
-                        "language_use": {"type": "integer", "minimum": 0, "maximum": 10},
-                        "topic_development": {"type": "integer", "minimum": 0, "maximum": 10},
+                        "scores": {
+                            "type": "object",
+                            "properties": {
+                                "delivery": {"type": "number", "minimum": 0, "maximum": 4},
+                                "language_use": {"type": "number", "minimum": 0, "maximum": 4},
+                                "topic_development": {"type": "number", "minimum": 0, "maximum": 4},
+                                "overall_score": {"type": "number", "minimum": 0, "maximum": 30}
+                            },
+                            "required": ["delivery", "language_use", "topic_development", "overall_score"]
+                        },
                         "overall_summary": {"type": "string"},
-                        "detailed_feedback": {"type": "string"}
+                        "detailed_feedback": {
+                            "type": "object",
+                            "properties": {
+                                "delivery_comment": {"type": "string"},
+                                "language_use_comment": {"type": "string"},
+                                "topic_development_comment": {"type": "string"}
+                            },
+                            "required": ["delivery_comment", "language_use_comment", "topic_development_comment"]
+                        }
                     },
-                    "required": ["delivery", "language_use", "topic_development", "overall_summary", "detailed_feedback"]
+                    "required": ["scores", "overall_summary", "detailed_feedback"]
                 }
             )
         )
         
         # Parse JSON response
         result_json = json.loads(response.text)
+        scores = result_json["scores"]
         
-        # Build GlobalEvaluation with Python-calculated fields
-        total_score = (
-            result_json["delivery"] + 
-            result_json["language_use"] + 
-            result_json["topic_development"]
-        )
+        # Extract 0-4 scale scores from Gemini
+        delivery_0_4 = scores["delivery"]
+        language_use_0_4 = scores["language_use"]
+        topic_development_0_4 = scores["topic_development"]
         
+        # Calculate total_score using Python (avoid model hallucination)
+        # Formula: (average_score / 4) * 30
+        average_score = (delivery_0_4 + language_use_0_4 + topic_development_0_4) / 3
+        total_score = round((average_score / 4) * 30)  # Round to integer (0-30 scale)
+        
+        # Keep scores in 0-4 scale (TOEFL official standard) for frontend display
+        # Round to 1 decimal place for better precision
+        delivery_score = round(delivery_0_4, 1)
+        language_use_score = round(language_use_0_4, 1)
+        topic_development_score = round(topic_development_0_4, 1)
+        
+        # Determine level based on total_score (0-30 scale)
         if total_score >= 24:
             level = "Excellent"
         elif total_score >= 18:
@@ -250,16 +276,27 @@ async def analyze_full_audio_gemini(audio_url: str, question_text: str) -> Globa
         else:
             level = "Weak"
         
+        # Combine detailed feedback into a single text
+        detailed_feedback_obj = result_json["detailed_feedback"]
+        detailed_feedback_text = f"""**表达 (Delivery)**
+{detailed_feedback_obj['delivery_comment']}
+
+**语言使用 (Language Use)**
+{detailed_feedback_obj['language_use_comment']}
+
+**话题展开 (Topic Development)**
+{detailed_feedback_obj['topic_development_comment']}"""
+        
         return GlobalEvaluation(
             total_score=total_score,
             score_breakdown={
-                "delivery": result_json["delivery"],
-                "language_use": result_json["language_use"],
-                "topic_development": result_json["topic_development"]
+                "delivery": delivery_score,
+                "language_use": language_use_score,
+                "topic_development": topic_development_score
             },
             level=level,
             overall_summary=result_json["overall_summary"],
-            detailed_feedback=result_json["detailed_feedback"]
+            detailed_feedback=detailed_feedback_text
         )
         
     finally:
@@ -605,11 +642,13 @@ async def parse_global_evaluation_to_json(
     llm_result = completion.choices[0].message.parsed
     
     # Step 2: Python calculates total_score and level
-    total_score = (
+    # LLM returns 0-4 scale, convert to 0-30 scale
+    average_score = (
         llm_result.delivery + 
         llm_result.language_use + 
         llm_result.topic_development
-    )
+    ) / 3
+    total_score = round((average_score / 4) * 30)  # Convert to 0-30 scale
     
     if total_score >= 24:
         level = "Excellent"
@@ -620,13 +659,13 @@ async def parse_global_evaluation_to_json(
     else:
         level = "Weak"
     
-    # Step 3: Build final GlobalEvaluation
+    # Step 3: Build final GlobalEvaluation (keep 0-4 scale for component scores)
     return GlobalEvaluation(
         total_score=total_score,
         score_breakdown={
-            "delivery": llm_result.delivery,
-            "language_use": llm_result.language_use,
-            "topic_development": llm_result.topic_development
+            "delivery": round(llm_result.delivery, 1),
+            "language_use": round(llm_result.language_use, 1),
+            "topic_development": round(llm_result.topic_development, 1)
         },
         level=level,
         overall_summary=llm_result.overall_summary,
