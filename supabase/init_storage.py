@@ -34,13 +34,26 @@ BUCKETS = [
     "toefl-recordings",  # For user recordings
 ]
 
-# Audio files to upload
-AUDIO_DIR = Path(__file__).parent.parent / "backend" / "migrations" / "audio"
+# Assets directory structure:
+# supabase/assets/
+#   ├── questions/   - Question audio files (question_{id}.mp3)
+#   └── recordings/  - Seed recording files (recording_{id}.mp3)
+ASSETS_DIR = Path(__file__).parent / "assets"
+QUESTIONS_DIR = ASSETS_DIR / "questions"
+RECORDINGS_DIR = ASSETS_DIR / "recordings"
 
-AUDIO_FILES = {
+# Question audio files: local_file -> storage_path
+QUESTION_AUDIO_FILES = {
     "question_01KCH9WP8W6TZXA5QXS1BFF6AS.mp3": "question_01KCH9WP8W6TZXA5QXS1BFF6AS/audio.mp3",
     "question_01KCH9WP8W6TZXA5QXS1BFF6AT.mp3": "question_01KCH9WP8W6TZXA5QXS1BFF6AT/audio.mp3",
     "question_01KCH9WP8W6TZXA5QXS1BFF6AV.mp3": "question_01KCH9WP8W6TZXA5QXS1BFF6AV/audio.mp3",
+}
+
+# Seed recordings: local_file -> storage_path
+# Storage format: recordings/{user_id}/{question_id}/{recording_id}.mp3
+SEED_RECORDINGS = {
+    "recording_01KD3MDFZNXA5BZZ4838W8KNMS.mp3": 
+        "recordings/a1b2c3d4-e5f6-7890-abcd-ef1234567890/question_01KCH9WP8W6TZXA5QXS1BFF6AS/recording_01KD3MDFZNXA5BZZ4838W8KNMS.mp3",
 }
 
 
@@ -85,13 +98,47 @@ def ensure_bucket(client, bucket_name: str) -> bool:
             return False
 
 
-def upload_audio_files(client, bucket_name: str):
-    """Upload audio files to the questions bucket."""
-    print(f"\nUploading audio files to: {bucket_name}")
+def upload_question_audio(client, bucket_name: str):
+    """Upload question audio files to the questions bucket."""
+    print(f"\nUploading to: {bucket_name}")
     print("-" * 50)
     
-    for local_file, storage_path in AUDIO_FILES.items():
-        local_path = AUDIO_DIR / local_file
+    if not QUESTIONS_DIR.exists():
+        print(f"⚠️  Questions directory not found: {QUESTIONS_DIR}")
+        return
+    
+    for local_file, storage_path in QUESTION_AUDIO_FILES.items():
+        local_path = QUESTIONS_DIR / local_file
+        
+        if not local_path.exists():
+            print(f"⚠️  File not found: {local_path}")
+            continue
+        
+        try:
+            with open(local_path, "rb") as f:
+                client.put_object(
+                    Bucket=bucket_name,
+                    Key=storage_path,
+                    Body=f,
+                    ContentType="audio/mpeg"
+                )
+            print(f"✅ Uploaded: {local_file} → {storage_path}")
+        except Exception as e:
+            print(f"❌ Failed: {local_file} - {e}")
+
+
+def upload_seed_recordings(client, bucket_name: str):
+    """Upload seed recording files to the recordings bucket."""
+    print(f"\nUploading to: {bucket_name}")
+    print("-" * 50)
+    
+    if not RECORDINGS_DIR.exists():
+        print(f"⚠️  Recordings directory not found: {RECORDINGS_DIR}")
+        print("   (This is expected on fresh installations)")
+        return
+    
+    for local_file, storage_path in SEED_RECORDINGS.items():
+        local_path = RECORDINGS_DIR / local_file
         
         if not local_path.exists():
             print(f"⚠️  File not found: {local_path}")
@@ -125,9 +172,13 @@ def main():
     for bucket in BUCKETS:
         ensure_bucket(client, bucket)
     
-    # Step 2: Upload audio files
-    print("\n🎵 Uploading audio files...")
-    upload_audio_files(client, "toefl-questions")
+    # Step 2: Upload question audio files
+    print("\n🎵 Uploading question audio files...")
+    upload_question_audio(client, "toefl-questions")
+    
+    # Step 3: Upload seed recording files
+    print("\n🎤 Uploading seed recordings...")
+    upload_seed_recordings(client, "toefl-recordings")
     
     # Done
     print("\n" + "=" * 60)
