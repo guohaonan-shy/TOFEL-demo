@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     # Supabase API URL (for public URLs)
     SUPABASE_URL: str = "http://127.0.0.1:54321"
     
+    # Supabase Auth - JWT Secret for token verification
+    # Get from: supabase status -> JWT Secret
+    SUPABASE_JWT_SECRET: str = ""
+    
     # Storage (S3 compatible - from `supabase status`)
     STORAGE_ENDPOINT: str = "http://127.0.0.1:54321/storage/v1/s3"
     STORAGE_ACCESS_KEY: str = ""  # From supabase status -> Storage (S3) -> Access Key

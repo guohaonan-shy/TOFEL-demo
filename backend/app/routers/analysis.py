@@ -10,6 +10,7 @@ from app.database import get_db
 from app.models import AnalysisResult
 from app.schemas import AnalysisResponse
 from app.services.analysis_service import run_streaming_analysis, AudioFile
+from app.auth import get_current_user, AuthenticatedUser
 
 router = APIRouter(prefix="/analysis")
 
@@ -18,6 +19,7 @@ router = APIRouter(prefix="/analysis")
 async def create_analysis(
     question_id: str = Form(...),
     audio: UploadFile = File(...),
+    current_user: AuthenticatedUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -55,9 +57,9 @@ async def create_analysis(
             """Callback to queue SSE events."""
             await event_queue.put(event)
         
-        # Start analysis task
+        # Start analysis task (with user_id for ownership)
         analysis_task = asyncio.create_task(
-            run_streaming_analysis(db, audio_file, question_id, send_event)
+            run_streaming_analysis(db, audio_file, question_id, send_event, user_id=current_user.user_id)
         )
         
         # Yield events as they come in
@@ -103,6 +105,7 @@ async def create_analysis(
 @router.get("/{task_id}", response_model=AnalysisResponse)
 async def get_analysis(
     task_id: int,
+    current_user: AuthenticatedUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Get analysis result by task ID."""
