@@ -105,43 +105,13 @@ export interface FullTranscript {
   }>;
 }
 
-// Structured Feedback Interfaces
-export interface PronunciationIssue {
-  word: string;
-  your_pronunciation?: string;
-  correct_pronunciation: string;
-  tip: string;
-  timestamp?: number;
-}
-
-export interface GrammarIssue {
-  original: string;
-  corrected: string;
-  explanation: string;
-  error_type: string;
-}
-
-export interface ExpressionSuggestion {
-  original: string;
-  improved: string;
-  reason: string;
-}
-
-export interface ActionableTip {
-  category: string;
-  tip: string;
-}
-
+// Structured Feedback Interfaces (Updated for Simplified Coach Persona)
 export interface ChunkFeedbackStructured {
-  summary: string;
-  pronunciation_issues: PronunciationIssue[];
-  pronunciation_score?: number;
-  grammar_issues: GrammarIssue[];
-  expression_suggestions: ExpressionSuggestion[];
-  fluency_notes?: string;
-  content_notes?: string;
-  actionable_tips: ActionableTip[];
-  strengths: string[];
+  overview: string;             // Coach's overall comment
+  strengths: string[];          // List of positive points
+  weaknesses: string[];         // Mixed list of top issues (pronunciation/grammar/logic)
+  corrected_text: string;       // Improved English version
+  correction_explanation: string; // Why it's better
 }
 
 export interface ChunkAnalysis {
@@ -150,6 +120,7 @@ export interface ChunkAnalysis {
   time_range: [number, number];  // [start, end] in seconds for frontend playback
   text: string;
   feedback_structured: ChunkFeedbackStructured;
+  cloned_audio_url?: string;  // URL to cloned voice audio (corrected version)
 }
 
 export interface ReportJSONV2 {
@@ -442,4 +413,3 @@ export async function submitAnalysisWithSSE(
     }
   }
 }
-

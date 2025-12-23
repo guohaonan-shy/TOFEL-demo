@@ -72,76 +72,46 @@ def get_full_audio_analysis_prompt_gemini(question_text: str) -> str:
 """
 
 
-
-
 def get_chunk_type_analysis_guidance_gemini() -> dict[str, str]:
-    """Chunk-type-specific analysis guidance for Gemini."""
+    """Chunk-type-specific analysis guidance for Gemini (Simplified for Coach Persona)."""
     return {
-        "opening_statement": """分析这段开头语：
-- 发音错误：识别0-5个最严重的发音问题（如果没有发音错误就返回空数组）
-- 语法错误：找出语法问题并提供纠正
-- 表达优化：建议更地道、更学术的表达方式（例如："good" → "beneficial"）
-- 流利度：评价停顿、语速、犹豫
-- 内容：thesis陈述是否明确
-- 优点：肯定做得好的地方
-- 可操作建议：给出具体改进建议""",
-        "viewpoint": """分析这段观点阐述：
-- 发音错误：识别0-5个最严重的发音问题（如果没有发音错误就返回空数组）
-- 语法错误：找出语法问题并提供纠正
-- 表达优化：建议更地道、更学术的表达方式
-- 流利度：评价停顿、语速、犹豫
-- 内容：论证逻辑、细节支撑是否充分
-- 优点：肯定做得好的地方
-- 可操作建议：给出具体改进建议""",
-        "closing_statement": """分析这段结语：
-- 发音错误：识别0-5个最严重的发音问题（如果没有发音错误就返回空数组）
-- 语法错误：找出语法问题并提供纠正
-- 表达优化：建议更地道、更学术的总结表达
-- 流利度：评价停顿、语速、犹豫
-- 内容：总结是否到位，是否有效回扣主题
-- 优点：肯定做得好的地方
-- 可操作建议：给出具体改进建议"""
+        "opening_statement": "这是开头段。重点关注：Thesis 是否清晰？第一句话是否自信？有没有明显的“背模板”痕迹（如不自然的语调）？",
+        "viewpoint": "这是观点阐述段。重点关注：逻辑连接词是否自然？例子是否具体？有没有严重的语法错误导致听不懂？",
+        "closing_statement": "这是结尾段。重点关注：是否仓促结束？有没有有效地回扣主题？语调是否自然下沉？"
     }
 
 
 def get_chunk_audio_analysis_prompt_gemini(chunk_text: str, chunk_type: str) -> str:
-    """Prompt for chunk audio analysis using Gemini."""
+    """Prompt for chunk audio analysis using Gemini with CoT."""
     type_prompts = get_chunk_type_analysis_guidance_gemini()
     
-    return f"""你是托福口语评分专家。请仔细听音频，用中文分析这段{chunk_type}。
+    return f"""你是托福口语的金牌教练。你的任务是给学生提供这段音频的“教练式点评”。
 
 参考转录文本：{chunk_text}
+片段类型：{chunk_type} ({type_prompts.get(chunk_type, "")})
 
-分析要求：
-{type_prompts.get(chunk_type, "分析这段内容的表现")}
+请按以下步骤进行分析：
 
-请完成以下分析（按优先级）：
+1. **深度思考 (Chain of Thought)**：
+   请在 `<thinking>` 标签中进行思考：
+   - **清晰度 (Intelligibility)**: 我听得懂吗？有哪些单词发音严重错误导致卡顿？或者语速太快/太慢？
+   - **准确性 (Accuracy)**: 这一段有没有明显的语法硬伤（如时态混乱、主谓不一致）？用词是否准确？
+   - **有效性 (Effectiveness)**: 逻辑顺畅吗？有没有废话？
+   - **优先级排序**: 在所有发现的问题中，哪 1-3 个是目前最阻碍TA拿高分的？（不要列出所有小问题，只抓核心）
 
-1. **发音分析（非常重要！）**：
-   - 仔细听音频，识别发音不清晰、不准确或有口音影响的单词
-   - 注意：即使是轻微的发音问题也要指出（如重音位置、元音发音、辅音发音）
-   - 对于中国学生，特别注意：th/s/z音、r/l音、v/w音、重音位置等常见问题
-   - 返回1-5个最需要改进的发音问题（如果发音较好，也要至少指出1-2个可以更完美的地方）
-   - 每个问题包含：单词、学生的发音（拼音或近似音标）、正确发音（IPA音标）、具体发音技巧
+2. **生成反馈 (JSON)**：
+   基于思考，生成以下 JSON 结构：
+   - `overview`: 温暖且专业的短评（2-3句话）。像教练一样说话，指出整体听感。
+   - `strengths`: 1-3个具体的闪光点（如：某个词发音很地道、从句用得很溜、观点很新颖）。
+   - `weaknesses`: **混合列表**。列出 1-3 个最需要改进的问题（发音、语法或逻辑）。不要分类，直接用自然语言描述（例如：“单词 'environment' 的重音在第二个音节”，“尝试用 'due to' 替换 'because' 会更连贯”）。
+   - `corrected_text`: 针对这段话的“满分示范”。保持原意，但修正语法、优化表达，使其更地道。**必须是英文**。
+   - `correction_explanation`: 解释为什么这么改。告诉学生改写后的版本好在哪里（例如：“把 'I think' 改为 'I firmly believe' 更能体现立场坚定”）。
 
-2. **语法分析**：找出语法错误，提供纠正版本和详细解释
-
-3. **表达优化**：找出可以改进的表达，提供更地道、更学术的版本
-
-4. **流利度评价**：评价语速、停顿、犹豫、连读情况
-
-5. **内容逻辑**：评价论证的相关性和逻辑性
-
-6. **优点强化**：肯定学生做得好的地方（正面反馈很重要！）
-
-7. **可操作建议**：针对上述问题，提供3-5条具体的、可操作的改进建议
-
-重要提示：
-- 所有文字内容必须用中文
-- **pronunciation_issues 不要返回空数组！** 即使发音整体不错，也要指出可以改进的地方
-- 发音分析要基于实际听到的音频，不仅仅是看文本
-- 提供具体的例子和建议，不要泛泛而谈
-- 音标要准确（使用IPA国际音标）"""
+重要原则：
+- **少即是多**：不要为了凑数填满列表。如果没有大问题，就夸奖并给出一个进阶建议。
+- **说人话**：不要用晦涩的语言学术语。
+- **正向激励**：即使问题很多，也要在 overview 中给点鼓励。
+"""
 
 
 # --- OpenAI Prompts ---
@@ -198,83 +168,56 @@ def get_full_audio_analysis_prompt_openai(question_text: str) -> str:
 
 
 def get_chunk_type_analysis_guidance_openai() -> dict[str, str]:
-    """Chunk-type-specific analysis guidance for OpenAI."""
+    """Chunk-type-specific analysis guidance for OpenAI (Simplified)."""
     return {
-        "opening_statement": """分析这段开头语：
-- 发音错误：识别1-5个最严重的发音问题（如果没有就说明发音很好）
-- 语法错误：找出语法问题并提供纠正
-- 表达优化：建议更地道、更学术的表达方式
-- 流利度：评价停顿、语速、犹豫
-- 内容：thesis陈述是否明确
-- 优点：肯定做得好的地方
-- 可操作建议：给出具体改进建议""",
-        "viewpoint": """分析这段观点阐述：
-- 发音错误：识别1-5个最严重的发音问题（如果没有就说明发音很好）
-- 语法错误：找出语法问题并提供纠正
-- 表达优化：建议更地道、更学术的表达方式
-- 流利度：评价停顿、语速、犹豫
-- 内容：论证逻辑、细节支撑是否充分
-- 优点：肯定做得好的地方
-- 可操作建议：给出具体改进建议""",
-        "closing_statement": """分析这段结语：
-- 发音错误：识别1-5个最严重的发音问题
-- 语法错误：找出语法问题并提供纠正
-- 表达优化：建议更地道、更学术的总结表达
-- 流利度：评价停顿、语速、犹豫
-- 内容：总结是否到位，是否有效回扣主题
-- 优点：肯定做得好的地方
-- 可操作建议：给出具体改进建议"""
+        "opening_statement": "这是开头段。重点关注：Thesis 是否清晰？第一句话是否自信？",
+        "viewpoint": "这是观点阐述段。重点关注：逻辑连接词是否自然？例子是否具体？",
+        "closing_statement": "这是结尾段。重点关注：是否仓促结束？有没有有效地回扣主题？"
     }
 
 
 def get_chunk_audio_analysis_prompt_openai(chunk_text: str, chunk_type: str) -> str:
-    """Prompt for chunk audio analysis using OpenAI."""
+    """Prompt for chunk audio analysis using OpenAI with CoT."""
     type_prompts = get_chunk_type_analysis_guidance_openai()
     
-    return f"""你是托福口语评分专家。请仔细听音频，用中文分析这段{chunk_type}。
+    return f"""你是托福口语的金牌教练。你的任务是给学生提供这段音频的“教练式点评”。
 
 参考转录文本：{chunk_text}
+片段类型：{chunk_type} ({type_prompts.get(chunk_type, "")})
 
-{type_prompts.get(chunk_type, "分析这段内容的表现")}
+请先进行**深度思考 (Chain of Thought)**：
+1. **清晰度**: 听得懂吗？有哪些发音或语速问题？
+2. **准确性**: 语法对吗？用词准吗？
+3. **有效性**: 逻辑顺吗？
+4. **优先级**: 找出 1-3 个最核心的问题。
 
-请按以下结构输出（中文markdown格式）：
+然后，请按以下 Markdown 结构输出（基于你的思考）：
 
-## 整体评价
-2-3句话总结这段内容的表现
+<thinking>
+(在这里写下你的简短思考过程，分析优缺点和确定优先级)
+</thinking>
 
-## 发音分析
-列出发音问题（如果有）：
-- 单词：[错误单词]
-  - 你的发音：[学生发音]
-  - 正确发音：[IPA音标]
-  - 技巧：[具体发音建议]
+## Overview
+(2-3句话的温暖专业短评，指出整体听感)
 
-## 语法问题
-列出语法错误（如果有）：
-- 原句：[错误句子]
-- 纠正：[正确句子]
-- 解释：[为什么错误，语法规则]
-- 类型：[错误类型，如时态、主谓一致等]
+## Strengths
+- (优点1)
+- (优点2，如果有)
 
-## 表达建议
-列出可以改进的表达（如果有）：
-- 原表达：[学生的表达]
-- 改进：[更好的表达]
-- 原因：[为什么更好]
+## Weaknesses
+- (核心问题1：直接描述问题，如“单词 'X' 发音不准”)
+- (核心问题2，如果有)
+- (核心问题3，如果有)
 
-## 流利度评价
-评价语速、停顿、犹豫情况
+## Corrected Text
+(针对这段话的英文改写示范)
 
-## 内容评价
-评价逻辑、相关性、细节支撑
+## Explanation
+(解释为什么这么改，指出改写后的亮点)
 
-## 优点
-列出做得好的地方（至少1-2点）
-
-## 改进建议
-给出3-5条具体的、可操作的改进建议，每条标注类别（发音/语法/词汇/结构/流利度）
-
-重要：所有内容必须用中文！"""
+重要：
+- **Weaknesses** 是混合列表（发音/语法/逻辑），只列最重要的。
+- 只要输出内容，不要解释 Markdown 格式。"""
 
 
 def get_parse_global_evaluation_system_prompt() -> str:
@@ -286,13 +229,11 @@ def get_parse_chunk_feedback_system_prompt() -> str:
     """System prompt for parsing chunk feedback from markdown."""
     return """从音频分析的markdown文本中提取结构化反馈。
 
-要求：
-1. 识别发音问题（pronunciation_issues）：单词、学生发音、正确发音、技巧
-2. 识别语法错误（grammar_issues）：原句、纠正、解释、错误类型
-3. 表达建议（expression_suggestions）：原表达、改进表达、原因
-4. 流利度评价（fluency_notes）：语速、停顿、犹豫
-5. 内容评价（content_notes）：逻辑、相关性、细节
-6. 可操作建议（actionable_tips）：分类和具体建议
-7. 优点（strengths）：做得好的地方
+你需要提取以下字段：
+1. `overview`: 总体评价
+2. `strengths`: 优点列表
+3. `weaknesses`: 待提升点列表（混合了发音、语法等问题）
+4. `corrected_text`: 改写后的英文文本
+5. `correction_explanation`: 改写理由
 
-所有内容必须用中文。如果某个字段在原文中没有明确信息，可以返回空数组或null。"""
+注意：`corrected_text` 必须是英文，其他字段用中文。"""

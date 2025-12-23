@@ -25,79 +25,24 @@ from google.genai.types import GenerateContentConfig, Part, Content
 
 # --- Structured Chunk Feedback Schemas ---
 
-class PronunciationIssue(BaseModel):
-    """Individual pronunciation error with correction."""
-    word: str = Field(..., description="The mispronounced word")
-    your_pronunciation: str | None = Field(None, description="Phonetic representation of how student said it (IPA or simple)")
-    correct_pronunciation: str = Field(..., description="Phonetic guide for correct pronunciation (IPA or simple)")
-    tip: str = Field(..., description="Specific tip for pronouncing this word correctly (in Chinese)")
-    timestamp: float | None = Field(None, description="When this word was spoken in the chunk (seconds from chunk start)")
-
-
-class GrammarIssue(BaseModel):
-    """Grammar error with correction."""
-    original: str = Field(..., description="The original incorrect phrase/sentence")
-    corrected: str = Field(..., description="The grammatically correct version")
-    explanation: str = Field(..., description="Why it's wrong and the grammar rule (in Chinese)")
-    error_type: str = Field(..., description="e.g., 'verb tense', 'subject-verb agreement', 'article usage' (in Chinese)")
-
-
-class ExpressionSuggestion(BaseModel):
-    """Vocabulary/expression improvement."""
-    original: str = Field(..., description="Student's expression")
-    improved: str = Field(..., description="More natural/academic expression")
-    reason: str = Field(..., description="Why the improved version is better (in Chinese)")
-
-
-class ActionableTip(BaseModel):
-    """Specific improvement tip."""
-    category: str = Field(..., description="e.g., 'pronunciation', 'grammar', 'vocabulary', 'structure', 'fluency' (in Chinese)")
-    tip: str = Field(..., description="Specific actionable advice (in Chinese)")
-
-
 class ChunkFeedbackStructured(BaseModel):
-    """Structured feedback for a chunk."""
+    """Refined structured feedback for a chunk."""
     
-    # Overall assessment
-    summary: str = Field(..., description="2-3 sentence summary of this chunk's performance (in Chinese)")
-    
-    # Pronunciation analysis (from audio LLM)
-    pronunciation_issues: list[PronunciationIssue] = Field(
-        default_factory=list,
-        max_length=5,
-        description="Words that were mispronounced with correction tips (0-5 items, dynamic based on actual errors)"
-    )
-    pronunciation_score: int | None = Field(None, ge=0, le=10, description="Optional pronunciation score for this chunk")
-    
-    # Grammar analysis
-    grammar_issues: list[GrammarIssue] = Field(
-        default_factory=list,
-        description="Grammar errors found in this chunk (in Chinese)"
-    )
-    
-    # Expression/Vocabulary suggestions
-    expression_suggestions: list[ExpressionSuggestion] = Field(
-        default_factory=list,
-        description="Better ways to express ideas (in Chinese)"
-    )
-    
-    # Fluency & Delivery notes
-    fluency_notes: str | None = Field(None, description="Comments on pace, pauses, hesitations (in Chinese)")
-    
-    # Content/Logic feedback (especially for viewpoint chunks)
-    content_notes: str | None = Field(None, description="Comments on logic, relevance, detail support (in Chinese)")
-    
-    # Actionable tips specific to this chunk
-    actionable_tips: list[ActionableTip] = Field(
-        default_factory=list,
-        description="Specific tips for improving this type of content (in Chinese)"
-    )
-    
-    # Strengths (positive reinforcement!)
-    strengths: list[str] = Field(
-        default_factory=list,
-        description="What the student did well in this chunk (in Chinese)"
-    )
+    # 1. 总体评价 (Coach's Comment)
+    overview: str = Field(..., description="A concise, encouraging evaluation of this specific chunk's performance (in Chinese).")
+
+    # 2. 好的地方 (What You Did Well)
+    strengths: list[str] = Field(..., description="List of 1-3 positive points (in Chinese).")
+
+    # 3. 待提升的地方 (Areas for Improvement)
+    # Mixed list of top issues: pronunciation, grammar, or logic
+    weaknesses: list[str] = Field(..., description="List of 1-3 specific issues to fix (pronunciation, grammar, or clarity) (in Chinese).")
+
+    # 4. 改进示范 (The 'Golden' Version)
+    corrected_text: str = Field(..., description="The improved English version of this chunk.")
+
+    # 5. 改进解读 (Why It's Better)
+    correction_explanation: str = Field(..., description="Explanation of why the corrected version is better (in Chinese).")
 
 
 class GlobalEvaluationLLM(BaseModel):
@@ -134,6 +79,7 @@ class ChunkInfo(BaseModel):
     time_range: list[float] = Field(..., description="[start, end] in seconds for frontend playback")
     text: str = Field(..., description="Text from Whisper for display")
     feedback_structured: ChunkFeedbackStructured = Field(..., description="Structured feedback with pronunciation, grammar, and expression analysis")
+    cloned_audio_url: str | None = Field(None, description="Presigned URL to cloned voice audio (corrected version)")
 
 
 class ToeflReportV2(BaseModel):
@@ -356,83 +302,30 @@ async def analyze_chunk_audio_gemini(
                 response_schema={
                     "type": "object",
                     "properties": {
-                        "summary": {
+                        "overview": {
                             "type": "string",
-                            "description": "2-3 sentence summary in Chinese"
-                        },
-                        "pronunciation_issues": {
-                            "type": "array",
-                            "maxItems": 5,
-                            "description": "1-5 pronunciation issues to improve. Even if pronunciation is good, suggest 1-2 areas for refinement. Focus on: stress, intonation, specific sounds (th, r, l, v, etc). DO NOT return empty array unless pronunciation is absolutely perfect.",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "word": {"type": "string"},
-                                    "your_pronunciation": {"type": "string"},
-                                    "correct_pronunciation": {"type": "string"},
-                                    "tip": {"type": "string"},
-                                    "timestamp": {"type": "number"}
-                                },
-                                "required": ["word", "correct_pronunciation", "tip"]
-                            }
-                        },
-                        "pronunciation_score": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "maximum": 10,
-                            "description": "Pronunciation score 0-10"
-                        },
-                        "grammar_issues": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "original": {"type": "string"},
-                                    "corrected": {"type": "string"},
-                                    "explanation": {"type": "string"},
-                                    "error_type": {"type": "string"}
-                                },
-                                "required": ["original", "corrected", "explanation", "error_type"]
-                            }
-                        },
-                        "expression_suggestions": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "original": {"type": "string"},
-                                    "improved": {"type": "string"},
-                                    "reason": {"type": "string"}
-                                },
-                                "required": ["original", "improved", "reason"]
-                            }
-                        },
-                        "fluency_notes": {
-                            "type": "string",
-                            "description": "Comments on pace, pauses, hesitations in Chinese"
-                        },
-                        "content_notes": {
-                            "type": "string",
-                            "description": "Comments on logic, relevance, detail support in Chinese"
-                        },
-                        "actionable_tips": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "category": {"type": "string"},
-                                    "tip": {"type": "string"}
-                                },
-                                "required": ["category", "tip"]
-                            }
+                            "description": "Concise coach's comment (in Chinese)"
                         },
                         "strengths": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "What the student did well (in Chinese)"
+                            "description": "1-3 positive points (in Chinese)"
+                        },
+                        "weaknesses": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "1-3 key issues to fix (in Chinese)"
+                        },
+                        "corrected_text": {
+                            "type": "string",
+                            "description": "Improved English version"
+                        },
+                        "correction_explanation": {
+                            "type": "string",
+                            "description": "Why the improved version is better (in Chinese)"
                         }
                     },
-                    "required": ["summary"]
+                    "required": ["overview", "strengths", "weaknesses", "corrected_text", "correction_explanation"]
                 }
             )
         )

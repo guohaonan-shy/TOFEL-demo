@@ -47,6 +47,7 @@ env/
 *.swo
 *~
 .DS_Store
+.history/
 
 # Node
 node_modules/
