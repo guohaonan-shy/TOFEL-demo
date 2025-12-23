@@ -76,7 +76,7 @@ def get_chunk_type_analysis_guidance_gemini() -> dict[str, str]:
     """Chunk-type-specific analysis guidance for Gemini (Simplified for Coach Persona)."""
     return {
         "opening_statement": "这是开头段。重点关注：Thesis 是否清晰？第一句话是否自信？有没有明显的“背模板”痕迹（如不自然的语调）？",
-        "viewpoint": "这是观点阐述段。重点关注：逻辑连接词是否自然？例子是否具体？有没有严重的语法错误导致听不懂？",
+        "viewpoint": "这是观点阐述段。重点关注：逻辑连接词是否自然？例子是否完整具体？有没有严重的语法错误导致听不懂？",
         "closing_statement": "这是结尾段。重点关注：是否仓促结束？有没有有效地回扣主题？语调是否自然下沉？"
     }
 
@@ -85,7 +85,7 @@ def get_chunk_audio_analysis_prompt_gemini(chunk_text: str, chunk_type: str) -> 
     """Prompt for chunk audio analysis using Gemini with CoT."""
     type_prompts = get_chunk_type_analysis_guidance_gemini()
     
-    return f"""你是托福口语的金牌教练。你的任务是给学生提供这段音频的“教练式点评”。
+    return f"""你是托福口语的金牌教练。你的任务是用中文给学生提供这段音频的“教练式点评”。
 
 参考转录文本：{chunk_text}
 片段类型：{chunk_type} ({type_prompts.get(chunk_type, "")})
@@ -104,13 +104,14 @@ def get_chunk_audio_analysis_prompt_gemini(chunk_text: str, chunk_type: str) -> 
    - `overview`: 温暖且专业的短评（2-3句话）。像教练一样说话，指出整体听感。
    - `strengths`: 1-3个具体的闪光点（如：某个词发音很地道、从句用得很溜、观点很新颖）。
    - `weaknesses`: **混合列表**。列出 1-3 个最需要改进的问题（发音、语法或逻辑）。不要分类，直接用自然语言描述（例如：“单词 'environment' 的重音在第二个音节”，“尝试用 'due to' 替换 'because' 会更连贯”）。
-   - `corrected_text`: 针对这段话的“满分示范”。保持原意，但修正语法、优化表达，使其更地道。**必须是英文**。
-   - `correction_explanation`: 解释为什么这么改。告诉学生改写后的版本好在哪里（例如：“把 'I think' 改为 'I firmly believe' 更能体现立场坚定”）。
+   - `corrected_text`: 针对这段话的“满分示范”。保持原意，但修正语法、优化表达，使其更地道，用词需要简洁明了，不要为炫技而使用过于复杂的句式和词汇，尽量贴近美国人日常说话的口吻。**这里必须是英文**。
+   - `correction_explanation`: 解释为什么这么改。告诉学生改写后的版本好在哪里。
 
 重要原则：
 - **少即是多**：不要为了凑数填满列表。如果没有大问题，就夸奖并给出一个进阶建议。
-- **说人话**：不要用晦涩的语言学术语。
+- **改进版本和评论要口语化**：不鼓励使用过于复杂的句式和词汇，要贴近美国人日常说话的口吻。
 - **正向激励**：即使问题很多，也要在 overview 中给点鼓励。
+- **你的人设**：你是托福口语的金牌教练，同时你也是地地道道的美式思维教练，拒绝中式思维教学，所以你的语言要贴近美国人日常说话的口吻。
 """
 
 

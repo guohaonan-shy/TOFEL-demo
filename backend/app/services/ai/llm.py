@@ -377,7 +377,7 @@ async def chunk_transcript_by_content(
     ])
     
     response = await client.chat.completions.create(
-        model="gpt-4o",
+        model="gpt-5",
         response_format={"type": "json_object"},
         messages=[
             {
