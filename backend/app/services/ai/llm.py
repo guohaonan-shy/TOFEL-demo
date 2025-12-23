@@ -134,6 +134,7 @@ class ChunkInfo(BaseModel):
     time_range: list[float] = Field(..., description="[start, end] in seconds for frontend playback")
     text: str = Field(..., description="Text from Whisper for display")
     feedback_structured: ChunkFeedbackStructured = Field(..., description="Structured feedback with pronunciation, grammar, and expression analysis")
+    cloned_audio_url: str | None = Field(None, description="URL to cloned voice audio for this chunk (corrected version)")
 
 
 class ToeflReportV2(BaseModel):
@@ -788,6 +789,59 @@ async def analyze_chunk_audio_unified(
         feedback_text = await analyze_chunk_audio(chunk_audio_bytes, chunk_text, chunk_type)
         # Step 2: Parse to structured JSON
         return await parse_chunk_feedback_to_json(feedback_text, chunk_text, chunk_type)
+
+
+async def generate_corrected_text_for_chunk(
+    chunk_text: str,
+    chunk_feedback: ChunkFeedbackStructured
+) -> str:
+    """
+    Generate corrected version of chunk text based on feedback.
+
+    Args:
+        chunk_text: Original transcript text
+        chunk_feedback: Structured feedback with grammar issues and expression suggestions
+
+    Returns:
+        Corrected text with improvements applied
+    """
+    client = get_openai_client()
+
+    # Build a prompt that applies the corrections
+    corrections = []
+
+    if chunk_feedback.grammar_issues:
+        corrections.append("Grammar corrections:")
+        for issue in chunk_feedback.grammar_issues:
+            corrections.append(f"- Change '{issue.original}' to '{issue.corrected}'")
+
+    if chunk_feedback.expression_suggestions:
+        corrections.append("\nExpression improvements:")
+        for suggestion in chunk_feedback.expression_suggestions:
+            corrections.append(f"- Replace '{suggestion.original}' with '{suggestion.improved}'")
+
+    corrections_text = "\n".join(corrections) if corrections else "No corrections needed."
+
+    prompt = f"""You are helping a TOEFL student improve their speaking.
+
+Original text:
+{chunk_text}
+
+Apply these corrections:
+{corrections_text}
+
+Generate the corrected version of the text. Keep the same general structure and ideas, but apply all the grammar and expression improvements. Output ONLY the corrected text, nothing else."""
+
+    response = await client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "You are a helpful TOEFL speaking coach. Generate corrected text based on feedback."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.3,
+    )
+
+    return response.choices[0].message.content.strip()
 
 
 # --- Legacy / Volcengine Logic ---

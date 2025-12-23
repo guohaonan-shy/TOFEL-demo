@@ -93,6 +93,7 @@ export interface ChunkAnalysis {
   time_range: [number, number];  // [start, end] in seconds for frontend playback
   text: string;
   feedback_structured: ChunkFeedbackStructured;
+  cloned_audio_url?: string;  // URL to cloned voice audio (corrected version)
 }
 
 export interface ReportJSONV2 {

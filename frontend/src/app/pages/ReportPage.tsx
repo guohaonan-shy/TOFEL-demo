@@ -71,7 +71,7 @@ export const ReportPage: React.FC<ReportPageProps> = ({
     if (recordingBlobUrl) {
       const audio = new Audio(recordingBlobUrl);
       audio.preload = 'metadata';
-      
+
       audio.addEventListener('loadedmetadata', () => {
         if (isFinite(audio.duration) && audio.duration > 1) {
           setDuration(audio.duration);
@@ -80,7 +80,7 @@ export const ReportPage: React.FC<ReportPageProps> = ({
           setDuration(chunkBasedDuration);
         }
       });
-      
+
       audio.addEventListener('timeupdate', () => {
         setCurrentTime(audio.currentTime);
         // Find active chunk based on current time
@@ -91,14 +91,14 @@ export const ReportPage: React.FC<ReportPageProps> = ({
           setActiveChunkId(activeChunk?.chunk_id ?? null);
         }
       });
-      
+
       audio.addEventListener('ended', () => {
         setIsPlaying(false);
         setActiveChunkId(null);
       });
-      
+
       audioRef.current = audio;
-      
+
       return () => {
         audio.pause();
         audio.src = '';
@@ -108,6 +108,16 @@ export const ReportPage: React.FC<ReportPageProps> = ({
       setDuration(chunkBasedDuration);
     }
   }, [recordingBlobUrl, report.chunks, chunkBasedDuration]);
+
+  // Cleanup cloned audio on unmount
+  useEffect(() => {
+    return () => {
+      if (clonedAudioRef.current) {
+        clonedAudioRef.current.pause();
+        clonedAudioRef.current.src = '';
+      }
+    };
+  }, []);
   
   // Play/pause toggle
   const togglePlay = async () => {
@@ -169,6 +179,45 @@ export const ReportPage: React.FC<ReportPageProps> = ({
   const toggleChunk = (chunkId: number) => {
     setExpandedChunkId(prev => prev === chunkId ? null : chunkId);
   };
+
+  // Cloned audio player state
+  const [playingClonedChunkId, setPlayingClonedChunkId] = useState<number | null>(null);
+  const clonedAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Play cloned audio for a chunk
+  const playClonedAudio = (chunk: ChunkAnalysis, e: React.MouseEvent) => {
+    e.stopPropagation();
+
+    if (!chunk.cloned_audio_url) return;
+
+    // If already playing this chunk, pause it
+    if (playingClonedChunkId === chunk.chunk_id && clonedAudioRef.current) {
+      clonedAudioRef.current.pause();
+      setPlayingClonedChunkId(null);
+      return;
+    }
+
+    // Stop any currently playing cloned audio
+    if (clonedAudioRef.current) {
+      clonedAudioRef.current.pause();
+    }
+
+    // Create and play new audio
+    const audio = new Audio(chunk.cloned_audio_url);
+    audio.play();
+    setPlayingClonedChunkId(chunk.chunk_id);
+
+    audio.onended = () => {
+      setPlayingClonedChunkId(null);
+    };
+
+    audio.onerror = () => {
+      setPlayingClonedChunkId(null);
+      console.error('Failed to play cloned audio');
+    };
+
+    clonedAudioRef.current = audio;
+  };
   
   // Chunk type labels and colors
   const getChunkTypeLabel = (chunk: ChunkAnalysis) => {
@@ -193,6 +242,9 @@ export const ReportPage: React.FC<ReportPageProps> = ({
   const renderChunkCard = (chunk: ChunkAnalysis) => {
     const isExpanded = expandedChunkId === chunk.chunk_id;
     const isActive = activeChunkId === chunk.chunk_id;
+
+    // Debug: Log chunk data
+    console.log(`Chunk ${chunk.chunk_id} - cloned_audio_url:`, chunk.cloned_audio_url ? 'Available' : 'Not available');
 
     // Handle card click - play this chunk
     const handleCardClick = () => {
@@ -223,8 +275,24 @@ export const ReportPage: React.FC<ReportPageProps> = ({
                   播放中
                 </span>
               )}
+              {/* Cloned audio play button */}
+              {chunk.cloned_audio_url && (
+                <button
+                  type="button"
+                  onClick={(e) => playClonedAudio(chunk, e)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                    playingClonedChunkId === chunk.chunk_id
+                      ? 'bg-green-600 text-white shadow-md'
+                      : 'bg-green-100 text-green-700 hover:bg-green-200 border border-green-300'
+                  }`}
+                  title="播放改进版本 (AI语音克隆)"
+                >
+                  <Volume2 className={`w-4 h-4 ${playingClonedChunkId === chunk.chunk_id ? 'animate-pulse' : ''}`} />
+                  <span>{playingClonedChunkId === chunk.chunk_id ? '播放中...' : '改进版本'}</span>
+                </button>
+              )}
             </div>
-            
+
             {/* Expand/Collapse button only */}
             <button
               type="button"
