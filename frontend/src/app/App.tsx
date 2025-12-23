@@ -224,14 +224,6 @@ const QuestionPage = () => {
     }
   }, [currentStep, searchParams, analysisReport, recordingId]);
 
-  // Pre-warm microphone when countdown is about to end (5 seconds left)
-  useEffect(() => {
-    if (currentStep === 'practice' && practicePhase === 'preparing' && timeLeft === 5 && !DEV_SKIP_MIC_CHECK) {
-      console.log('Pre-warming microphone for recording...');
-      audioRecorder.warmup();
-    }
-  }, [currentStep, practicePhase, timeLeft]);
-
   // Countdown Logic
   useEffect(() => {
     let interval: ReturnType<typeof setInterval> | null = null;
@@ -337,7 +329,8 @@ const QuestionPage = () => {
 
   // ---------------- Actions ----------------
 
-  // Request microphone permission before starting practice
+  // Request microphone permission and warm up stream for recording
+  // (Plan A: Get permission + keep stream ready at the start, avoid duplicate getUserMedia calls)
   const requestMicrophonePermission = async (): Promise<boolean> => {
     // Skip permission check in dev mode (for UI debugging in Visual Editor)
     if (DEV_SKIP_MIC_CHECK) {
@@ -358,11 +351,9 @@ const QuestionPage = () => {
         }
       }
       
-      // Request microphone access to trigger browser permission prompt
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      
-      // Permission granted - stop the stream immediately (we'll start recording later)
-      stream.getTracks().forEach(track => track.stop());
+      // Request microphone access AND keep the stream for recording
+      // This triggers browser permission prompt and pre-warms the microphone
+      await audioRecorder.warmup();
       setMicPermission('granted');
       return true;
     } catch (error) {

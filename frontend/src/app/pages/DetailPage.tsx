@@ -24,7 +24,7 @@ export const DetailPage: React.FC<DetailPageProps> = ({
 }) => {
   if (isLoadingQuestions) {
     return (
-      <div className="flex items-center justify-center h-full">
+      <div className="flex items-center justify-center min-h-[calc(100vh-64px-4rem)]">
         <div className="text-center">
           <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
           <p className="text-gray-600">Loading questions...</p>
@@ -35,7 +35,7 @@ export const DetailPage: React.FC<DetailPageProps> = ({
 
   if (apiError || !currentQuestion) {
     return (
-      <div className="flex items-center justify-center h-full">
+      <div className="flex items-center justify-center min-h-[calc(100vh-64px-4rem)]">
         <div className="text-center max-w-md">
           <AlertCircle size={48} className="text-red-500 mx-auto mb-4" />
           <h3 className="text-xl font-bold text-gray-900 mb-2">Failed to Load Questions</h3>
@@ -52,7 +52,7 @@ export const DetailPage: React.FC<DetailPageProps> = ({
   }
 
   return (
-    <div className="flex flex-col items-center justify-center h-full max-w-3xl mx-auto w-full animate-in fade-in zoom-in-95 duration-300">
+    <div className="flex flex-col items-center justify-center min-h-[calc(100vh-64px-4rem)] max-w-3xl mx-auto w-full animate-in fade-in zoom-in-95 duration-300">
       
       {/* Question Card */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 md:p-12 w-full text-center mb-8 relative overflow-hidden">

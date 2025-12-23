@@ -74,7 +74,8 @@ export function useAudioRecorder(): AudioRecorderState & AudioRecorderControls &
 
   /**
    * Pre-initialize microphone stream for faster recording start
-   * Call this during countdown to avoid delay when recording starts
+   * Call this at the start of practice to request permission and keep stream ready
+   * Throws error if permission is denied (so caller can handle it)
    */
   const warmup = useCallback(async () => {
     // Already warmed up
@@ -82,22 +83,17 @@ export function useAudioRecorder(): AudioRecorderState & AudioRecorderControls &
       return;
     }
     
-    try {
-      console.log('Warming up microphone...');
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        } 
-      });
-      warmedUpStreamRef.current = stream;
-      setIsWarmedUp(true);
-      console.log('Microphone warmed up and ready');
-    } catch (err) {
-      console.error('Failed to warmup microphone:', err);
-      // Don't set error state here, let startRecording handle it
-    }
+    console.log('Warming up microphone...');
+    const stream = await navigator.mediaDevices.getUserMedia({ 
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      } 
+    });
+    warmedUpStreamRef.current = stream;
+    setIsWarmedUp(true);
+    console.log('Microphone warmed up and ready');
   }, []);
 
   /**
