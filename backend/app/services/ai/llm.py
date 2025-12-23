@@ -1,15 +1,22 @@
 """LLM service using Volcengine Doubao and OpenAI GPT-4o for multimodal analysis."""
 
-import httpx
 import json
 import base64
 import tempfile
 import os
 from app.config import settings
+from app.clients import get_openai_client, get_gemini_client, get_http_client
+from app.services.ai.prompts import (
+    get_full_audio_analysis_prompt_gemini,
+    get_chunk_audio_analysis_prompt_gemini,
+    get_chunk_transcript_system_prompt,
+    get_full_audio_analysis_prompt_openai,
+    get_chunk_audio_analysis_prompt_openai,
+    get_parse_global_evaluation_system_prompt,
+    get_parse_chunk_feedback_system_prompt,
+)
 from pydantic import BaseModel, Field
-from openai import AsyncOpenAI
 from pydub import AudioSegment
-from google import genai
 from google.genai import types
 from google.genai.types import GenerateContentConfig, Part, Content
 
@@ -18,96 +25,41 @@ from google.genai.types import GenerateContentConfig, Part, Content
 
 # --- Structured Chunk Feedback Schemas ---
 
-class PronunciationIssue(BaseModel):
-    """Individual pronunciation error with correction."""
-    word: str = Field(..., description="The mispronounced word")
-    your_pronunciation: str | None = Field(None, description="Phonetic representation of how student said it (IPA or simple)")
-    correct_pronunciation: str = Field(..., description="Phonetic guide for correct pronunciation (IPA or simple)")
-    tip: str = Field(..., description="Specific tip for pronouncing this word correctly (in Chinese)")
-    timestamp: float | None = Field(None, description="When this word was spoken in the chunk (seconds from chunk start)")
-
-
-class GrammarIssue(BaseModel):
-    """Grammar error with correction."""
-    original: str = Field(..., description="The original incorrect phrase/sentence")
-    corrected: str = Field(..., description="The grammatically correct version")
-    explanation: str = Field(..., description="Why it's wrong and the grammar rule (in Chinese)")
-    error_type: str = Field(..., description="e.g., 'verb tense', 'subject-verb agreement', 'article usage' (in Chinese)")
-
-
-class ExpressionSuggestion(BaseModel):
-    """Vocabulary/expression improvement."""
-    original: str = Field(..., description="Student's expression")
-    improved: str = Field(..., description="More natural/academic expression")
-    reason: str = Field(..., description="Why the improved version is better (in Chinese)")
-
-
-class ActionableTip(BaseModel):
-    """Specific improvement tip."""
-    category: str = Field(..., description="e.g., 'pronunciation', 'grammar', 'vocabulary', 'structure', 'fluency' (in Chinese)")
-    tip: str = Field(..., description="Specific actionable advice (in Chinese)")
-
-
 class ChunkFeedbackStructured(BaseModel):
-    """Structured feedback for a chunk."""
+    """Refined structured feedback for a chunk."""
     
-    # Overall assessment
-    summary: str = Field(..., description="2-3 sentence summary of this chunk's performance (in Chinese)")
-    
-    # Pronunciation analysis (from audio LLM)
-    pronunciation_issues: list[PronunciationIssue] = Field(
-        default_factory=list,
-        max_length=5,
-        description="Words that were mispronounced with correction tips (0-5 items, dynamic based on actual errors)"
-    )
-    pronunciation_score: int | None = Field(None, ge=0, le=10, description="Optional pronunciation score for this chunk")
-    
-    # Grammar analysis
-    grammar_issues: list[GrammarIssue] = Field(
-        default_factory=list,
-        description="Grammar errors found in this chunk (in Chinese)"
-    )
-    
-    # Expression/Vocabulary suggestions
-    expression_suggestions: list[ExpressionSuggestion] = Field(
-        default_factory=list,
-        description="Better ways to express ideas (in Chinese)"
-    )
-    
-    # Fluency & Delivery notes
-    fluency_notes: str | None = Field(None, description="Comments on pace, pauses, hesitations (in Chinese)")
-    
-    # Content/Logic feedback (especially for viewpoint chunks)
-    content_notes: str | None = Field(None, description="Comments on logic, relevance, detail support (in Chinese)")
-    
-    # Actionable tips specific to this chunk
-    actionable_tips: list[ActionableTip] = Field(
-        default_factory=list,
-        description="Specific tips for improving this type of content (in Chinese)"
-    )
-    
-    # Strengths (positive reinforcement!)
-    strengths: list[str] = Field(
-        default_factory=list,
-        description="What the student did well in this chunk (in Chinese)"
-    )
+    # 1. 总体评价 (Coach's Comment)
+    overview: str = Field(..., description="A concise, encouraging evaluation of this specific chunk's performance (in Chinese).")
+
+    # 2. 好的地方 (What You Did Well)
+    strengths: list[str] = Field(..., description="List of 1-3 positive points (in Chinese).")
+
+    # 3. 待提升的地方 (Areas for Improvement)
+    # Mixed list of top issues: pronunciation, grammar, or logic
+    weaknesses: list[str] = Field(..., description="List of 1-3 specific issues to fix (pronunciation, grammar, or clarity) (in Chinese).")
+
+    # 4. 改进示范 (The 'Golden' Version)
+    corrected_text: str = Field(..., description="The improved English version of this chunk.")
+
+    # 5. 改进解读 (Why It's Better)
+    correction_explanation: str = Field(..., description="Explanation of why the corrected version is better (in Chinese).")
 
 
 class GlobalEvaluationLLM(BaseModel):
-    """LLM output - only component scores (0-10 each)."""
-    delivery: int = Field(..., ge=0, le=10, description="Delivery score")
-    language_use: int = Field(..., ge=0, le=10, description="Language use score")
-    topic_development: int = Field(..., ge=0, le=10, description="Topic development score")
+    """LLM output - only component scores (0-4 each, TOEFL official scale)."""
+    delivery: float = Field(..., ge=0, le=4, description="Delivery score (0-4)")
+    language_use: float = Field(..., ge=0, le=4, description="Language use score (0-4)")
+    topic_development: float = Field(..., ge=0, le=4, description="Topic development score (0-4)")
     overall_summary: str = Field(..., description="Brief summary in Chinese")
     detailed_feedback: str = Field(..., description="Detailed analysis from audio")
 
 
 class GlobalEvaluation(BaseModel):
     """Final evaluation with Python-calculated fields."""
-    total_score: int = Field(..., ge=0, le=30, description="Sum of three scores")
-    score_breakdown: dict[str, int] = Field(
+    total_score: int = Field(..., ge=0, le=30, description="Total score (0-30 scale)")
+    score_breakdown: dict[str, float] = Field(
         ..., 
-        description="delivery, language_use, topic_development (each 0-10)"
+        description="delivery, language_use, topic_development (each 0-4.0, TOEFL official scale)"
     )
     level: str = Field(..., description="Excellent/Good/Fair/Weak based on total_score")
     overall_summary: str = Field(..., description="Brief summary in Chinese")
@@ -123,10 +75,11 @@ class FullTranscript(BaseModel):
 class ChunkInfo(BaseModel):
     """Individual chunk analysis."""
     chunk_id: int
-    chunk_type: str = Field(..., description="opening_statement, viewpoint, etc.")
+    chunk_type: str = Field(..., description="opening_statement, viewpoint, closing_statement, etc.")
     time_range: list[float] = Field(..., description="[start, end] in seconds for frontend playback")
     text: str = Field(..., description="Text from Whisper for display")
     feedback_structured: ChunkFeedbackStructured = Field(..., description="Structured feedback with pronunciation, grammar, and expression analysis")
+    cloned_audio_url: str | None = Field(None, description="Presigned URL to cloned voice audio (corrected version)")
 
 
 class ToeflReportV2(BaseModel):
@@ -174,15 +127,14 @@ async def analyze_full_audio_gemini(audio_url: str, question_text: str) -> Globa
     if not settings.GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY is not set")
     
-    # Create client
-    client = genai.Client(api_key=settings.GEMINI_API_KEY)
+    # Use singleton clients
+    client = get_gemini_client()
+    http_client = get_http_client()
     
-    # Download audio with extended timeout
-    timeout = httpx.Timeout(60.0, connect=10.0)  # 60s read, 10s connect
-    async with httpx.AsyncClient(timeout=timeout) as http_client:
-        response = await http_client.get(audio_url)
-        response.raise_for_status()
-        audio_bytes = response.content
+    # Download audio
+    response = await http_client.get(audio_url)
+    response.raise_for_status()
+    audio_bytes = response.content
     
     # Save to temp file
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
@@ -197,23 +149,7 @@ async def analyze_full_audio_gemini(audio_url: str, question_text: str) -> Globa
         )
         
         # Generate analysis with JSON schema
-        prompt = f"""你是托福口语评分专家，请用中文分析这段录音并评分。
-
-题目：{question_text}
-
-评分标准（各维度0-10分）：
-1. **Delivery（表达）**: 发音清晰度、流利度、语调自然度
-2. **Language Use（语言）**: 语法准确性、词汇丰富度、句式多样性
-3. **Topic Development（主题）**: 内容相关性、论证逻辑、细节支撑
-
-请仔细听录音后，用**中文**返回JSON格式的评价：
-- delivery: 表达维度分数（0-10）
-- language_use: 语言维度分数（0-10）
-- topic_development: 主题维度分数（0-10）
-- overall_summary: 2-3句话的整体评价（必须用中文）
-- detailed_feedback: 详细的分析反馈，包含三个维度的具体评价（必须用中文，markdown格式）
-
-重要：所有文字内容（overall_summary 和 detailed_feedback）必须用中文书写！"""
+        prompt = get_full_audio_analysis_prompt_gemini(question_text)
         
         response = client.models.generate_content(
             model="gemini-2.5-flash",
@@ -230,27 +166,53 @@ async def analyze_full_audio_gemini(audio_url: str, question_text: str) -> Globa
                 response_schema={
                     "type": "object",
                     "properties": {
-                        "delivery": {"type": "integer", "minimum": 0, "maximum": 10},
-                        "language_use": {"type": "integer", "minimum": 0, "maximum": 10},
-                        "topic_development": {"type": "integer", "minimum": 0, "maximum": 10},
+                        "scores": {
+                            "type": "object",
+                            "properties": {
+                                "delivery": {"type": "number", "minimum": 0, "maximum": 4},
+                                "language_use": {"type": "number", "minimum": 0, "maximum": 4},
+                                "topic_development": {"type": "number", "minimum": 0, "maximum": 4},
+                                "overall_score": {"type": "number", "minimum": 0, "maximum": 30}
+                            },
+                            "required": ["delivery", "language_use", "topic_development", "overall_score"]
+                        },
                         "overall_summary": {"type": "string"},
-                        "detailed_feedback": {"type": "string"}
+                        "detailed_feedback": {
+                            "type": "object",
+                            "properties": {
+                                "delivery_comment": {"type": "string"},
+                                "language_use_comment": {"type": "string"},
+                                "topic_development_comment": {"type": "string"}
+                            },
+                            "required": ["delivery_comment", "language_use_comment", "topic_development_comment"]
+                        }
                     },
-                    "required": ["delivery", "language_use", "topic_development", "overall_summary", "detailed_feedback"]
+                    "required": ["scores", "overall_summary", "detailed_feedback"]
                 }
             )
         )
         
         # Parse JSON response
         result_json = json.loads(response.text)
+        scores = result_json["scores"]
         
-        # Build GlobalEvaluation with Python-calculated fields
-        total_score = (
-            result_json["delivery"] + 
-            result_json["language_use"] + 
-            result_json["topic_development"]
-        )
+        # Extract 0-4 scale scores from Gemini
+        delivery_0_4 = scores["delivery"]
+        language_use_0_4 = scores["language_use"]
+        topic_development_0_4 = scores["topic_development"]
         
+        # Calculate total_score using Python (avoid model hallucination)
+        # Formula: (average_score / 4) * 30
+        average_score = (delivery_0_4 + language_use_0_4 + topic_development_0_4) / 3
+        total_score = round((average_score / 4) * 30)  # Round to integer (0-30 scale)
+        
+        # Keep scores in 0-4 scale (TOEFL official standard) for frontend display
+        # Round to 1 decimal place for better precision
+        delivery_score = round(delivery_0_4, 1)
+        language_use_score = round(language_use_0_4, 1)
+        topic_development_score = round(topic_development_0_4, 1)
+        
+        # Determine level based on total_score (0-30 scale)
         if total_score >= 24:
             level = "Excellent"
         elif total_score >= 18:
@@ -260,16 +222,27 @@ async def analyze_full_audio_gemini(audio_url: str, question_text: str) -> Globa
         else:
             level = "Weak"
         
+        # Combine detailed feedback into a single text
+        detailed_feedback_obj = result_json["detailed_feedback"]
+        detailed_feedback_text = f"""**表达 (Delivery)**
+{detailed_feedback_obj['delivery_comment']}
+
+**语言使用 (Language Use)**
+{detailed_feedback_obj['language_use_comment']}
+
+**话题展开 (Topic Development)**
+{detailed_feedback_obj['topic_development_comment']}"""
+        
         return GlobalEvaluation(
             total_score=total_score,
             score_breakdown={
-                "delivery": result_json["delivery"],
-                "language_use": result_json["language_use"],
-                "topic_development": result_json["topic_development"]
+                "delivery": delivery_score,
+                "language_use": language_use_score,
+                "topic_development": topic_development_score
             },
             level=level,
             overall_summary=result_json["overall_summary"],
-            detailed_feedback=result_json["detailed_feedback"]
+            detailed_feedback=detailed_feedback_text
         )
         
     finally:
@@ -298,8 +271,8 @@ async def analyze_chunk_audio_gemini(
     if not settings.GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY is not set")
     
-    # Create client
-    client = genai.Client(api_key=settings.GEMINI_API_KEY)
+    # Use singleton Gemini client
+    client = get_gemini_client()
     
     # Write audio bytes to temp file for Gemini upload
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
@@ -312,63 +285,10 @@ async def analyze_chunk_audio_gemini(
             config=types.UploadFileConfig(mimeType="audio/mpeg")
         )
         
-        # Chunk-type-specific analysis guidance
-        type_prompts = {
-            "opening_statement": """分析这段开头语：
-- 发音错误：识别0-5个最严重的发音问题（如果没有发音错误就返回空数组）
-- 语法错误：找出语法问题并提供纠正
-- 表达优化：建议更地道、更学术的表达方式（例如："good" → "beneficial"）
-- 流利度：评价停顿、语速、犹豫
-- 内容：thesis陈述是否明确
-- 优点：肯定做得好的地方
-- 可操作建议：给出具体改进建议""",
-            "viewpoint": """分析这段观点阐述：
-- 发音错误：识别0-5个最严重的发音问题（如果没有发音错误就返回空数组）
-- 语法错误：找出语法问题并提供纠正
-- 表达优化：建议更地道、更学术的表达方式
-- 流利度：评价停顿、语速、犹豫
-- 内容：论证逻辑、细节支撑是否充分
-- 优点：肯定做得好的地方
-- 可操作建议：给出具体改进建议"""
-        }
-        
-        prompt = f"""你是托福口语评分专家。请仔细听音频，用中文分析这段{chunk_type}。
-
-参考转录文本：{chunk_text}
-
-分析要求：
-{type_prompts.get(chunk_type, "分析这段内容的表现")}
-
-请完成以下分析（按优先级）：
-
-1. **发音分析（非常重要！）**：
-   - 仔细听音频，识别发音不清晰、不准确或有口音影响的单词
-   - 注意：即使是轻微的发音问题也要指出（如重音位置、元音发音、辅音发音）
-   - 对于中国学生，特别注意：th/s/z音、r/l音、v/w音、重音位置等常见问题
-   - 返回1-5个最需要改进的发音问题（如果发音较好，也要至少指出1-2个可以更完美的地方）
-   - 每个问题包含：单词、学生的发音（拼音或近似音标）、正确发音（IPA音标）、具体发音技巧
-
-2. **语法分析**：找出语法错误，提供纠正版本和详细解释
-
-3. **表达优化**：找出可以改进的表达，提供更地道、更学术的版本
-
-4. **流利度评价**：评价语速、停顿、犹豫、连读情况
-
-5. **内容逻辑**：评价论证的相关性和逻辑性
-
-6. **优点强化**：肯定学生做得好的地方（正面反馈很重要！）
-
-7. **可操作建议**：针对上述问题，提供3-5条具体的、可操作的改进建议
-
-重要提示：
-- 所有文字内容必须用中文
-- **pronunciation_issues 不要返回空数组！** 即使发音整体不错，也要指出可以改进的地方
-- 发音分析要基于实际听到的音频，不仅仅是看文本
-- 提供具体的例子和建议，不要泛泛而谈
-- 音标要准确（使用IPA国际音标）"""
+        prompt = get_chunk_audio_analysis_prompt_gemini(chunk_text, chunk_type)
         
         response = client.models.generate_content(
-            model="gemini-2.0-flash-exp",
+            model="gemini-2.5-flash",
             contents=[
                 Content(
                     parts=[
@@ -382,83 +302,30 @@ async def analyze_chunk_audio_gemini(
                 response_schema={
                     "type": "object",
                     "properties": {
-                        "summary": {
+                        "overview": {
                             "type": "string",
-                            "description": "2-3 sentence summary in Chinese"
-                        },
-                        "pronunciation_issues": {
-                            "type": "array",
-                            "maxItems": 5,
-                            "description": "1-5 pronunciation issues to improve. Even if pronunciation is good, suggest 1-2 areas for refinement. Focus on: stress, intonation, specific sounds (th, r, l, v, etc). DO NOT return empty array unless pronunciation is absolutely perfect.",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "word": {"type": "string"},
-                                    "your_pronunciation": {"type": "string"},
-                                    "correct_pronunciation": {"type": "string"},
-                                    "tip": {"type": "string"},
-                                    "timestamp": {"type": "number"}
-                                },
-                                "required": ["word", "correct_pronunciation", "tip"]
-                            }
-                        },
-                        "pronunciation_score": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "maximum": 10,
-                            "description": "Pronunciation score 0-10"
-                        },
-                        "grammar_issues": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "original": {"type": "string"},
-                                    "corrected": {"type": "string"},
-                                    "explanation": {"type": "string"},
-                                    "error_type": {"type": "string"}
-                                },
-                                "required": ["original", "corrected", "explanation", "error_type"]
-                            }
-                        },
-                        "expression_suggestions": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "original": {"type": "string"},
-                                    "improved": {"type": "string"},
-                                    "reason": {"type": "string"}
-                                },
-                                "required": ["original", "improved", "reason"]
-                            }
-                        },
-                        "fluency_notes": {
-                            "type": "string",
-                            "description": "Comments on pace, pauses, hesitations in Chinese"
-                        },
-                        "content_notes": {
-                            "type": "string",
-                            "description": "Comments on logic, relevance, detail support in Chinese"
-                        },
-                        "actionable_tips": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "category": {"type": "string"},
-                                    "tip": {"type": "string"}
-                                },
-                                "required": ["category", "tip"]
-                            }
+                            "description": "Concise coach's comment (in Chinese)"
                         },
                         "strengths": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "What the student did well (in Chinese)"
+                            "description": "1-3 positive points (in Chinese)"
+                        },
+                        "weaknesses": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "1-3 key issues to fix (in Chinese)"
+                        },
+                        "corrected_text": {
+                            "type": "string",
+                            "description": "Improved English version"
+                        },
+                        "correction_explanation": {
+                            "type": "string",
+                            "description": "Why the improved version is better (in Chinese)"
                         }
                     },
-                    "required": ["summary"]
+                    "required": ["overview", "strengths", "weaknesses", "corrected_text", "correction_explanation"]
                 }
             )
         )
@@ -500,7 +367,8 @@ async def chunk_transcript_by_content(
     if not settings.OPENAI_API_KEY:
         raise ValueError("OPENAI_API_KEY is not set")
     
-    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    # Use singleton OpenAI client
+    client = get_openai_client()
     
     # Format transcript with timestamps
     formatted_segments = "\n".join([
@@ -514,22 +382,7 @@ async def chunk_transcript_by_content(
         messages=[
             {
                 "role": "system",
-                "content": """分析独立口语转录，识别内容结构：
-
-规则：
-1. 第一块必须是 opening_statement（开头语）
-2. 后续是观点和支持细节，chunk_type为 viewpoint
-3. 根据内容逻辑动态确定分块数量（通常2-4块）
-
-返回JSON格式：
-{
-  "chunks": [
-    {"chunk_id": 0, "chunk_type": "opening_statement", "start": 0.0, "end": 5.2, "text": "完整文本"},
-    {"chunk_id": 1, "chunk_type": "viewpoint", "start": 5.2, "end": 22.1, "text": "完整文本"}
-  ]
-}
-
-每个chunk的text字段必须包含该时间段内的完整文本内容。"""
+                "content": get_chunk_transcript_system_prompt()
             },
             {
                 "role": "user",
@@ -556,13 +409,14 @@ async def analyze_full_audio(audio_url: str, question_text: str) -> str:
     if not settings.OPENAI_API_KEY:
         raise ValueError("OPENAI_API_KEY is not set")
     
-    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    # Use singleton clients
+    client = get_openai_client()
+    http_client = get_http_client()
     
     # Download MP3 audio (already converted at upload time)
-    async with httpx.AsyncClient() as http_client:
-        response = await http_client.get(audio_url)
-        response.raise_for_status()
-        audio_bytes = response.content
+    response = await http_client.get(audio_url)
+    response.raise_for_status()
+    audio_bytes = response.content
     
     # Encode MP3 to base64 (no conversion needed)
     audio_base64 = base64.b64encode(audio_bytes).decode()
@@ -582,27 +436,7 @@ async def analyze_full_audio(audio_url: str, question_text: str) -> str:
                     },
                     {
                         "type": "text",
-                        "text": f"""托福口语评分专家，分析录音并评分。
-
-问题：{question_text}
-
-评分标准（各0-10分）：
-1. Delivery: 发音、流利度、语调
-2. Language Use: 语法、词汇、句式
-3. Topic Development: 内容相关性、逻辑
-
-输出格式（中文markdown）：
-
-## 整体评分
-- Delivery: X/10
-- Language Use: X/10
-- Topic Development: X/10
-
-## 整体评价
-2-3句总结
-
-## 详细分析
-具体分析"""
+                        "text": get_full_audio_analysis_prompt_openai(question_text)
                     }
                 ]
             }
@@ -632,30 +466,11 @@ async def analyze_chunk_audio(
     if not settings.OPENAI_API_KEY:
         raise ValueError("OPENAI_API_KEY is not set")
 
-    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    # Use singleton OpenAI client
+    client = get_openai_client()
 
     # Encode audio bytes to base64 for OpenAI API
     audio_base64 = base64.b64encode(chunk_audio_bytes).decode()
-    
-    # Chunk-specific analysis guidance
-    type_prompts = {
-        "opening_statement": """分析这段开头语：
-- 发音错误：识别1-5个最严重的发音问题（如果没有就说明发音很好）
-- 语法错误：找出语法问题并提供纠正
-- 表达优化：建议更地道、更学术的表达方式
-- 流利度：评价停顿、语速、犹豫
-- 内容：thesis陈述是否明确
-- 优点：肯定做得好的地方
-- 可操作建议：给出具体改进建议""",
-        "viewpoint": """分析这段观点阐述：
-- 发音错误：识别1-5个最严重的发音问题（如果没有就说明发音很好）
-- 语法错误：找出语法问题并提供纠正
-- 表达优化：建议更地道、更学术的表达方式
-- 流利度：评价停顿、语速、犹豫
-- 内容：论证逻辑、细节支撑是否充分
-- 优点：肯定做得好的地方
-- 可操作建议：给出具体改进建议"""
-    }
     
     completion = await client.chat.completions.create(
         model="gpt-4o-audio-preview",
@@ -671,50 +486,7 @@ async def analyze_chunk_audio(
                     },
                     {
                         "type": "text",
-                        "text": f"""你是托福口语评分专家。请仔细听音频，用中文分析这段{chunk_type}。
-
-参考转录文本：{chunk_text}
-
-{type_prompts.get(chunk_type, "分析这段内容的表现")}
-
-请按以下结构输出（中文markdown格式）：
-
-## 整体评价
-2-3句话总结这段内容的表现
-
-## 发音分析
-列出发音问题（如果有）：
-- 单词：[错误单词]
-  - 你的发音：[学生发音]
-  - 正确发音：[IPA音标]
-  - 技巧：[具体发音建议]
-
-## 语法问题
-列出语法错误（如果有）：
-- 原句：[错误句子]
-- 纠正：[正确句子]
-- 解释：[为什么错误，语法规则]
-- 类型：[错误类型，如时态、主谓一致等]
-
-## 表达建议
-列出可以改进的表达（如果有）：
-- 原表达：[学生的表达]
-- 改进：[更好的表达]
-- 原因：[为什么更好]
-
-## 流利度评价
-评价语速、停顿、犹豫情况
-
-## 内容评价
-评价逻辑、相关性、细节支撑
-
-## 优点
-列出做得好的地方（至少1-2点）
-
-## 改进建议
-给出3-5条具体的、可操作的改进建议，每条标注类别（发音/语法/词汇/结构/流利度）
-
-重要：所有内容必须用中文！"""
+                        "text": get_chunk_audio_analysis_prompt_openai(chunk_text, chunk_type)
                     }
                 ]
             }
@@ -741,7 +513,8 @@ async def parse_global_evaluation_to_json(
     if not settings.OPENAI_API_KEY:
         raise ValueError("OPENAI_API_KEY is not set")
     
-    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    # Use singleton OpenAI client
+    client = get_openai_client()
     
     # Step 1: LLM extracts component scores
     completion = await client.beta.chat.completions.parse(
@@ -749,7 +522,7 @@ async def parse_global_evaluation_to_json(
         messages=[
             {
                 "role": "system",
-                "content": "从评价文本中提取三项分数（各0-10分）和文字评价。"
+                "content": get_parse_global_evaluation_system_prompt()
             },
             {
                 "role": "user",
@@ -762,11 +535,13 @@ async def parse_global_evaluation_to_json(
     llm_result = completion.choices[0].message.parsed
     
     # Step 2: Python calculates total_score and level
-    total_score = (
+    # LLM returns 0-4 scale, convert to 0-30 scale
+    average_score = (
         llm_result.delivery + 
         llm_result.language_use + 
         llm_result.topic_development
-    )
+    ) / 3
+    total_score = round((average_score / 4) * 30)  # Convert to 0-30 scale
     
     if total_score >= 24:
         level = "Excellent"
@@ -777,13 +552,13 @@ async def parse_global_evaluation_to_json(
     else:
         level = "Weak"
     
-    # Step 3: Build final GlobalEvaluation
+    # Step 3: Build final GlobalEvaluation (keep 0-4 scale for component scores)
     return GlobalEvaluation(
         total_score=total_score,
         score_breakdown={
-            "delivery": llm_result.delivery,
-            "language_use": llm_result.language_use,
-            "topic_development": llm_result.topic_development
+            "delivery": round(llm_result.delivery, 1),
+            "language_use": round(llm_result.language_use, 1),
+            "topic_development": round(llm_result.topic_development, 1)
         },
         level=level,
         overall_summary=llm_result.overall_summary,
@@ -811,7 +586,8 @@ async def parse_chunk_feedback_to_json(
     if not settings.OPENAI_API_KEY:
         raise ValueError("OPENAI_API_KEY is not set")
     
-    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    # Use singleton OpenAI client
+    client = get_openai_client()
     
     # Parse markdown into structured format
     completion = await client.beta.chat.completions.parse(
@@ -819,18 +595,7 @@ async def parse_chunk_feedback_to_json(
         messages=[
             {
                 "role": "system",
-                "content": """从音频分析的markdown文本中提取结构化反馈。
-
-要求：
-1. 识别发音问题（pronunciation_issues）：单词、学生发音、正确发音、技巧
-2. 识别语法错误（grammar_issues）：原句、纠正、解释、错误类型
-3. 表达建议（expression_suggestions）：原表达、改进表达、原因
-4. 流利度评价（fluency_notes）：语速、停顿、犹豫
-5. 内容评价（content_notes）：逻辑、相关性、细节
-6. 可操作建议（actionable_tips）：分类和具体建议
-7. 优点（strengths）：做得好的地方
-
-所有内容必须用中文。如果某个字段在原文中没有明确信息，可以返回空数组或null。"""
+                "content": get_parse_chunk_feedback_system_prompt()
             },
             {
                 "role": "user",

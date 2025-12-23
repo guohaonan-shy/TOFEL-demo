@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.database import init_db, close_db
+from app.clients import init_clients, close_clients
 from app.routers import questions, recordings, analysis
 
 
@@ -14,8 +15,10 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     # Startup
     await init_db()
+    await init_clients()
     yield
-    # Shutdown: clean up database connection pool
+    # Shutdown: clean up resources
+    await close_clients()
     await close_db()
 
 

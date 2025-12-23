@@ -1,12 +1,11 @@
 """ASR service using Volcengine (Doubao) and OpenAI Whisper."""
 
-import httpx
 import tempfile
 import os
 from io import BytesIO
-from openai import AsyncOpenAI
 from pydub import AudioSegment
 from app.config import settings
+from app.clients import get_openai_client, get_http_client
 
 
 async def transcribe_audio_openai_from_bytes(audio_bytes: bytes, filename: str = "audio.mp3") -> dict:
@@ -28,8 +27,9 @@ async def transcribe_audio_openai_from_bytes(audio_bytes: bytes, filename: str =
     """
     if not settings.OPENAI_API_KEY:
         raise ValueError("OPENAI_API_KEY is not set")
-        
-    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    
+    # Use singleton OpenAI client
+    client = get_openai_client()
     
     # Create a file-like object from bytes
     audio_file = BytesIO(audio_bytes)
@@ -66,11 +66,11 @@ async def transcribe_audio_openai(audio_url: str) -> dict:
     Returns:
         dict with text and segments
     """
-    # Download audio
-    async with httpx.AsyncClient() as http_client:
-        response = await http_client.get(audio_url)
-        response.raise_for_status()
-        audio_bytes = response.content
+    # Download audio using singleton HTTP client
+    http_client = get_http_client()
+    response = await http_client.get(audio_url)
+    response.raise_for_status()
+    audio_bytes = response.content
     
     return await transcribe_audio_openai_from_bytes(audio_bytes)
 

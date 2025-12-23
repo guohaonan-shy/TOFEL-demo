@@ -42,7 +42,10 @@ class Settings(BaseSettings):
     VOLCENGINE_API_KEY: str = ""
     VOLCENGINE_ACCESS_KEY: str = ""
     VOLCENGINE_SECRET_KEY: str = ""
-    
+
+    # ElevenLabs
+    ELEVENLABS_API_KEY: str = ""
+
     # CORS
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:5174"]
     

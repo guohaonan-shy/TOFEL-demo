@@ -47,6 +47,7 @@ env/
 *.swo
 *~
 .DS_Store
+.history/
 
 # Node
 node_modules/
@@ -75,3 +76,7 @@ htmlcov/
 .DS_Store
 .AppleDouble
 .LSOverride
+
+# Local data directories
+backend/data/
+
