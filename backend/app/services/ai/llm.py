@@ -254,7 +254,8 @@ async def analyze_full_audio_gemini(audio_url: str, question_text: str) -> Globa
 async def analyze_chunk_audio_gemini(
     chunk_audio_bytes: bytes,
     chunk_text: str,
-    chunk_type: str
+    chunk_type: str,
+    previous_chunks_context: list[dict] | None = None
 ) -> ChunkFeedbackStructured:
     """
     Analyze chunk audio using Gemini 2.5 Pro with structured JSON output.
@@ -264,6 +265,7 @@ async def analyze_chunk_audio_gemini(
         chunk_audio_bytes: MP3 audio bytes for this chunk
         chunk_text: Text content of the chunk
         chunk_type: Type of chunk (opening_statement, viewpoint)
+        previous_chunks_context: Optional list of previous chunks with their type and summary
         
     Returns:
         ChunkFeedbackStructured: Structured feedback object
@@ -285,7 +287,11 @@ async def analyze_chunk_audio_gemini(
             config=types.UploadFileConfig(mimeType="audio/mpeg")
         )
         
-        prompt = get_chunk_audio_analysis_prompt_gemini(chunk_text, chunk_type)
+        prompt = get_chunk_audio_analysis_prompt_gemini(
+            chunk_text, 
+            chunk_type, 
+            previous_chunks_context
+        )
         
         response = client.models.generate_content(
             model="gemini-2.5-flash",
@@ -449,7 +455,8 @@ async def analyze_full_audio(audio_url: str, question_text: str) -> str:
 async def analyze_chunk_audio(
     chunk_audio_bytes: bytes,
     chunk_text: str,
-    chunk_type: str
+    chunk_type: str,
+    previous_chunks_context: list[dict] | None = None
 ) -> str:
     """
     Analyze individual chunk audio using Audio GPT.
@@ -459,6 +466,7 @@ async def analyze_chunk_audio(
         chunk_audio_bytes: MP3 audio bytes for this chunk
         chunk_text: Text content of the chunk
         chunk_type: Type of chunk (opening_statement, viewpoint)
+        previous_chunks_context: Optional list of previous chunks with their type and summary
 
     Returns:
         str: Markdown text with comprehensive feedback
@@ -486,7 +494,11 @@ async def analyze_chunk_audio(
                     },
                     {
                         "type": "text",
-                        "text": get_chunk_audio_analysis_prompt_openai(chunk_text, chunk_type)
+                        "text": get_chunk_audio_analysis_prompt_openai(
+                            chunk_text, 
+                            chunk_type, 
+                            previous_chunks_context
+                        )
                     }
                 ]
             }
@@ -650,7 +662,8 @@ async def analyze_full_audio_unified(audio_url: str, question_text: str) -> Glob
 async def analyze_chunk_audio_unified(
     chunk_audio_bytes: bytes,
     chunk_text: str,
-    chunk_type: str
+    chunk_type: str,
+    previous_chunks_context: list[dict] | None = None
 ) -> ChunkFeedbackStructured:
     """
     Unified interface for chunk audio analysis with provider selection and fallback.
@@ -659,6 +672,7 @@ async def analyze_chunk_audio_unified(
         chunk_audio_bytes: MP3 audio bytes for this chunk
         chunk_text: Text content of the chunk
         chunk_type: Type of chunk (opening_statement, viewpoint)
+        previous_chunks_context: Optional list of previous chunks with their type and summary
         
     Returns:
         ChunkFeedbackStructured: Structured feedback object
@@ -667,18 +681,33 @@ async def analyze_chunk_audio_unified(
     
     if provider == "gemini":
         try:
-            return await analyze_chunk_audio_gemini(chunk_audio_bytes, chunk_text, chunk_type)
+            return await analyze_chunk_audio_gemini(
+                chunk_audio_bytes, 
+                chunk_text, 
+                chunk_type, 
+                previous_chunks_context
+            )
         except Exception as e:
             if settings.OPENAI_API_KEY:
                 print(f"Gemini chunk analysis failed: {e}. Falling back to OpenAI.")
                 # Fallback to OpenAI two-step process
-                feedback_text = await analyze_chunk_audio(chunk_audio_bytes, chunk_text, chunk_type)
+                feedback_text = await analyze_chunk_audio(
+                    chunk_audio_bytes, 
+                    chunk_text, 
+                    chunk_type, 
+                    previous_chunks_context
+                )
                 return await parse_chunk_feedback_to_json(feedback_text, chunk_text, chunk_type)
             else:
                 raise Exception(f"Gemini chunk analysis failed: {e}")
     else:  # openai
         # Step 1: Audio analysis (markdown)
-        feedback_text = await analyze_chunk_audio(chunk_audio_bytes, chunk_text, chunk_type)
+        feedback_text = await analyze_chunk_audio(
+            chunk_audio_bytes, 
+            chunk_text, 
+            chunk_type, 
+            previous_chunks_context
+        )
         # Step 2: Parse to structured JSON
         return await parse_chunk_feedback_to_json(feedback_text, chunk_text, chunk_type)
 

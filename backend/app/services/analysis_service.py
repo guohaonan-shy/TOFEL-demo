@@ -176,22 +176,33 @@ async def run_streaming_analysis(
             mp3_data, chunk_structure["chunks"]
         )
         
-        # ========== STEP 4: CHUNK AUDIO ANALYSIS ==========
-        # Analyze each chunk in parallel (independent of Full Audio Analysis)
-        chunk_tasks = []
-        for i, chunk_info in enumerate(chunk_structure["chunks"]):
-            # Use in-memory chunk audio bytes directly
-            task = asyncio.create_task(
-                analyze_chunk_audio_unified(
-                    chunk_audio_list[i],
-                    chunk_info["text"],
-                    chunk_info["chunk_type"]
-                )
-            )
-            chunk_tasks.append(task)
+        # ========== STEP 4: CHUNK AUDIO ANALYSIS WITH CONTEXT ==========
+        # Analyze each chunk sequentially to pass context from previous chunks
+        # This allows later chunks to understand the overall argument structure
+        chunk_feedbacks = []
+        previous_chunks_context = []
         
-        # Wait for all chunk analyses to complete
-        chunk_feedbacks = await asyncio.gather(*chunk_tasks)
+        for i, chunk_info in enumerate(chunk_structure["chunks"]):
+            # For the first chunk (usually opening_statement), no context needed
+            # For subsequent chunks, pass summaries of all previous chunks
+            context_to_pass = previous_chunks_context if i > 0 else None
+            
+            # Analyze this chunk with context
+            feedback = await analyze_chunk_audio_unified(
+                chunk_audio_list[i],
+                chunk_info["text"],
+                chunk_info["chunk_type"],
+                context_to_pass
+            )
+            chunk_feedbacks.append(feedback)
+            
+            # Build context summary for next chunk
+            # Extract key content from the chunk text (first 100 chars as summary)
+            chunk_summary = chunk_info["text"][:100] + "..." if len(chunk_info["text"]) > 100 else chunk_info["text"]
+            previous_chunks_context.append({
+                "chunk_type": chunk_info["chunk_type"],
+                "summary": chunk_summary
+            })
         
         # Wait for Full Audio Analysis to complete (started in Step 2)
         # By now, it has been running in parallel with ASR + chunking + chunk analysis

@@ -31,6 +31,10 @@ class Question(Base):
     sos_keywords: Mapped[list | None] = mapped_column(JSON, nullable=True)
     sos_starter: Mapped[str | None] = mapped_column(Text, nullable=True)
     
+    # [新增] 综合口语专用字段
+    reading_content: Mapped[str | None] = mapped_column(Text, nullable=True)     # 对应 json 中的 data.reading
+    listening_transcript: Mapped[str | None] = mapped_column(Text, nullable=True) # 对应 json 中的 data.listening
+    
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
         DateTime, 
