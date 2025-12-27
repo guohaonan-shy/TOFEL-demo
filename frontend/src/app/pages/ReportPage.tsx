@@ -41,12 +41,23 @@ const ScoreDimensionCard: React.FC<ScoreDimensionCardProps> = ({
 }) => {
   const percentage = (score / maxScore) * 100;
   
+  // Get preview text (first 60 characters)
+  const getPreviewText = (text: string) => {
+    if (text.length <= 60) return text;
+    return text.substring(0, 60) + '...';
+  };
+  
   return (
     <div 
-      className={`rounded-2xl border-2 overflow-hidden transition-all duration-300 cursor-pointer hover:shadow-lg ${bgGradient} ${
-        isExpanded ? 'border-blue-400 shadow-lg' : 'border-gray-100 hover:border-blue-200'
+      className={`rounded-2xl border-2 overflow-hidden transition-all duration-300 ${bgGradient} ${
+        isExpanded 
+          ? 'border-blue-400 shadow-2xl z-10' 
+          : 'border-gray-100 hover:border-blue-200 hover:shadow-lg'
       }`}
-      onClick={onToggle}
+      style={{
+        transform: isExpanded ? 'scale(1.02)' : 'scale(1)',
+        zIndex: isExpanded ? 10 : 1
+      }}
     >
       <div className="p-6">
         {/* Header */}
@@ -73,25 +84,33 @@ const ScoreDimensionCard: React.FC<ScoreDimensionCardProps> = ({
           />
         </div>
         
-        {/* Expand indicator */}
-        <div className="flex items-center justify-between">
-          <span className={`text-sm font-medium ${
-            percentage >= 80 ? 'text-emerald-600' : percentage >= 60 ? 'text-blue-600' : 'text-amber-600'
+        {/* Content Preview */}
+        <div className="space-y-3">
+          <p className={`text-gray-600 text-sm leading-relaxed transition-all duration-300 ${
+            isExpanded ? 'opacity-100' : 'opacity-90'
           }`}>
-            {percentage >= 80 ? '优秀' : percentage >= 60 ? '良好' : '需提升'}
-          </span>
-          <ChevronDown className={`w-5 h-5 text-gray-400 transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''}`} />
+            {isExpanded ? description : getPreviewText(description)}
+          </p>
+          
+          {/* Expand/Collapse Button - Centered */}
+          <div className="flex justify-center pt-2">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggle();
+              }}
+              className={`flex items-center gap-2 text-sm font-semibold transition-all duration-200 ${
+                isExpanded 
+                  ? 'text-gray-500 hover:text-gray-700' 
+                  : `${textColor.replace('text-', 'text-')} hover:opacity-80`
+              }`}
+            >
+              <span>{isExpanded ? '收起' : '展开更多'}</span>
+              <ChevronDown className={`w-4 h-4 transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''}`} />
+            </button>
+          </div>
         </div>
       </div>
-      
-      {/* Expanded content */}
-      {isExpanded && (
-        <div className="px-6 pb-6 pt-0 border-t border-gray-100 bg-white/50">
-          <p className="text-gray-600 text-sm leading-relaxed mt-5">
-            {description}
-          </p>
-        </div>
-      )}
     </div>
   );
 };
@@ -481,7 +500,7 @@ export const ReportPage: React.FC<ReportPageProps> = ({
   };
   
   return (
-    <div className="w-full max-w-5xl mx-auto h-full overflow-y-auto pb-24">
+    <div className="w-full max-w-6xl mx-auto h-full overflow-y-auto pb-24">
       {/* Score Card + Summary Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
         
@@ -537,7 +556,7 @@ export const ReportPage: React.FC<ReportPageProps> = ({
       </div>
       
       {/* Three Score Dimension Cards with Progress Bars */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-8 px-2">
         <ScoreDimensionCard
           icon={<Mic className="w-6 h-6 text-blue-600" />}
           title="表达 Delivery"
@@ -765,3 +784,4 @@ export const ReportPage: React.FC<ReportPageProps> = ({
 };
 
 export default ReportPage;
+

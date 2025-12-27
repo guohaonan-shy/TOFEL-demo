@@ -64,9 +64,9 @@ def get_full_audio_analysis_prompt_gemini(question_text: str) -> str:
   "overall_summary": "2-3句话的考官综评。必须遵循[肯定+建议]的模式。例如：'你的语流非常自信（肯定），这一点很难得。目前主要的分数瓶颈在于细节展开不够充分（建议），如果能多加一个具体的例子，分数会有质的飞跃（鼓励）。' 如果分数极低，请温柔地询问是否有设备录音问题。",
   
   "detailed_feedback": {{
-    "delivery_comment": "表达维度的详细点评（遵循肯定+建议原则）...",
-    "language_use_comment": "语言维度的详细点评（遵循肯定+建议原则）...",
-    "topic_development_comment": "逻辑维度的详细点评（遵循肯定+建议原则）..."
+    "delivery_comment": "表达维度的详细点评，80-120字（遵循肯定+建议原则，简洁有力）...",
+    "language_use_comment": "语言维度的详细点评，80-120字（遵循肯定+建议原则，简洁有力）...",
+    "topic_development_comment": "话题展开维度的详细点评，80-120字（遵循肯定+建议原则，简洁有力）..."
   }}
 }}
 """
@@ -75,11 +75,46 @@ def get_full_audio_analysis_prompt_gemini(question_text: str) -> str:
 def get_chunk_type_analysis_guidance_gemini() -> dict[str, str]:
     """Chunk-type-specific analysis guidance for Gemini (Simplified for Coach Persona)."""
     return {
-        "opening_statement": "这是开头段。重点关注：Thesis 是否清晰？第一句话是否自信？有没有明显的“背模板”痕迹（如不自然的语调）？",
+        "opening_statement": """
+        这是开头段（Opening）。这是给考官留下第一印象的关键 5-8 秒。
+        **核心评估指标**：
+        1. **Directness (开门见山)**: 用户是否在前 3 秒内直接亮出观点？有没有使用废话文学（如 "Personally, I would like to say that..." 这种拖沓的表达）？
+        2. **Efficiency (信息密度)**: 是否浪费时间复述题目？（这是大忌）。
+        3. **Phrasing (自然度)**: 是否使用了僵硬的模板（如 "With the development of..." 或 "Coin has two sides"）？
+        4. **Stance (立场)**: 观点是模棱两可还是坚定清晰？
+        **Better Version 策略**: 必须极度精简，用最地道的 Native Speaker 方式一句话定调。
+        """,
         "viewpoint": "这是观点阐述段。重点关注：逻辑连接词是否自然？例子是否完整具体？有没有严重的语法错误导致听不懂？",
         "closing_statement": "这是结尾段。重点关注：是否仓促结束？有没有有效地回扣主题？语调是否自然下沉？"
     }
 
+def get_better_version_instructions(chunk_type: str) -> str:
+        # Build length control guidance based on chunk type
+    if chunk_type in "closing_statement":
+        length_guidance = """
+        - **核心策略**: 简洁收尾 (Quick Wrap-up)。
+        - **长度控制**: **严格限制为 1 句话**。
+        - **内容要求**: 自然地重述观点（换一种说法）。**严禁**引入新的论点或信息。
+        - **语调**: 使用自然的下沉语调 (Falling intonation phrasing) 结束。
+        """
+    elif chunk_type == "opening_statement":
+        length_guidance = """
+        - **核心策略**: 精简去油 (Trim & Punch)。只做减法，不做加法。
+        - **长度控制**: 保持短小精悍（最多 1-2 句话）。
+        - **内容限制**: **严禁**在此处展开细节或论证。只需清晰有力地表明观点 (Thesis)。
+        - **句数调整**: 如果原文啰嗦、重复，**必须减少句数**。将多句废话合并为一句有力的表达。
+        - **重点**: 删掉所有“模板废话”（如 'Personally speaking', 'With the development of...'），开门见山。
+        """
+    else:  # viewpoint
+        length_guidance = """
+        - **核心策略**: 扩充与锚定 (Expand & Anchor) + 高密度表达。
+        - **细节注入**: 你**必须**将 weakness 部分构思的“具体场景/例子 (example_expansion)”自然地融入文本。这是提分的关键。
+        - **长度/时间控制**: 目标长度 **50-75 词** (对应 20-25 秒的黄金语速)。
+          * **若原文过短 (<30词)**: 通过增加具体细节进行扩写，不要只重复观点。
+          * **若原文已很长**: 通过**压缩句式**（如把从句改为分词结构，把 loose sentence 改为 precise vocab）来腾出空间放入细节。
+        - **禁止**: 不要写成流水账。每一句话都必须为论证服务。目标是：虽然字数不多，但画面感极强。
+        """
+    return length_guidance
 
 def get_chunk_audio_analysis_prompt_gemini(
     chunk_text: str, 
@@ -105,11 +140,7 @@ def get_chunk_audio_analysis_prompt_gemini(
             context_section += f"- **片段 {i+1} ({ctx['chunk_type']})**: {ctx['summary']}\n"
         context_section += "\n**注意**: 以上只是背景信息，你的主要任务是分析当前这段音频。\n"
     
-    # Build length control guidance based on chunk type
-    if chunk_type in ["opening_statement", "closing_statement"]:
-        length_guidance = "**长度控制（关键）**: 开头语/总结应保持简洁有力。**保持原句数量**，只做语法和用词优化，不要扩展内容。如果原文是1句话，改进版也应该是1句话；如果是2句话，改进版也是2句话。"
-    else:  # viewpoint
-        length_guidance = "**长度控制（关键）**: 考虑到独立口语一个观点最多不超过25秒（约50-60词），改进版的长度应控制在**50-70词以内**。如果原文过长，需要精简；如果原文过短，可以适度补充具体细节。目标是在有限时间内表达清晰、论证充分。"
+    length_guidance = get_better_version_instructions(chunk_type)
     
     return f"""## 你的身份 (Role)
 你是一名顶尖的托福口语教练，以"证据导向教学"（Evidence-Based Teaching）著称。你从不空谈，每一条反馈都必须有据可依。
@@ -139,6 +170,9 @@ def get_chunk_audio_analysis_prompt_gemini(
      * 当前这段在整体论证中的角色是什么？
    
    - **Step 1: 内容分析**：
+     * (如果 chunk_type 是 'opening_statement'):
+        - **Check "Filler Ratio"**: 计算有效信息（观点）与无效铺垫（模板词）的比例。如果铺垫超过 3-7 个词，记为 Weakness。
+        - **Check "Restatement"**: 用户是否复述了题目背景？如果是，必须指出这是浪费时间。
      * 用户在这段中说了什么观点或论点？
      * 用了什么例子或细节来支持？
      * 论证逻辑是什么？（观点 => 解释 => 例子）

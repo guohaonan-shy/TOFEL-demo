@@ -14,3 +14,5 @@ ADD COLUMN IF NOT EXISTS listening_transcript TEXT;
 COMMENT ON COLUMN questions.reading_content IS 'Reading passage content for integrated speaking tasks';
 COMMENT ON COLUMN questions.listening_transcript IS 'Listening transcript for integrated speaking tasks';
 
+
+
