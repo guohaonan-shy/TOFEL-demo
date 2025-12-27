@@ -97,6 +97,8 @@ export interface GlobalEvaluation {
   level: string;
   overall_summary: string;
   detailed_feedback: string;
+  additional_examples?: string[];  // Two 4-score reference examples in English
+  example_audio_urls?: (string | null)[];  // Cloned voice audio URLs for reference examples
 }
 
 export interface FullTranscript {

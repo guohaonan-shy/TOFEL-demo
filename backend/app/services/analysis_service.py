@@ -217,19 +217,24 @@ async def run_streaming_analysis(
         # Wait for voice cloning to complete (started in Step 2)
         voice_id = await voice_clone_task
         
-        # Generate TTS audio for all chunks in parallel
+        # Generate TTS audio for all chunks and examples in parallel
         if voice_id:
-            cloned_audio_urls = await generate_chunk_tts_parallel(
+            examples = global_evaluation.additional_examples or []
+            cloned_audio_urls, example_audio_urls = await generate_all_tts_with_cloned_voice(
                 voice_id=voice_id,
                 chunks=chunk_structure["chunks"],
                 chunk_feedbacks=chunk_feedbacks,
+                examples=examples,
                 recording_id=recording.recording_id,
                 question_id=question_id
             )
+            # Update global_evaluation with example audio URLs
+            global_evaluation.example_audio_urls = example_audio_urls
         else:
             # Voice cloning failed or not configured - skip TTS
             print(f"[TTS] Skipping TTS generation (no voice_id)")
             cloned_audio_urls = [None] * len(chunk_structure["chunks"])
+            global_evaluation.example_audio_urls = []
 
         # Build chunks with time_range (frontend uses this to play from original audio)
         chunks = []
@@ -444,6 +449,107 @@ async def _generate_single_chunk_tts(
         return None
 
 
+async def _generate_single_example_tts(
+    voice_id: str,
+    example_text: str,
+    example_index: int,
+    recording_id: str,
+    question_id: str
+) -> str | None:
+    """
+    Generate TTS for a single reference example (for parallel execution).
+    
+    Args:
+        voice_id: ElevenLabs voice ID (already cloned)
+        example_text: Reference example text to speak
+        example_index: Index of this example (0 or 1)
+        recording_id: Recording ID for file naming
+        question_id: Question ID for file naming
+        
+    Returns:
+        Presigned URL for the TTS audio, or None if failed
+    """
+    try:
+        elevenlabs = get_elevenlabs_service()
+        
+        print(f"[Example TTS] Example {example_index}: '{example_text[:50]}...'")
+        
+        # Generate speech with cloned voice
+        audio_data = await elevenlabs.text_to_speech(
+            text=example_text,
+            voice_id=voice_id
+        )
+        print(f"[Example TTS] Example {example_index}: Generated {len(audio_data)} bytes")
+        
+        # Upload to storage
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        object_key = f"examples/{question_id}/{recording_id}/example_{example_index}_{timestamp}.mp3"
+        
+        await storage_service.upload_audio(
+            bucket=storage_service.bucket_recordings,
+            object_key=object_key,
+            data=audio_data,
+            content_type="audio/mpeg"
+        )
+        
+        # Get presigned URL
+        url = storage_service.get_presigned_url(
+            bucket=storage_service.bucket_recordings,
+            object_key=object_key
+        )
+        
+        print(f"[Example TTS] Example {example_index}: ✓ Complete!")
+        return url
+        
+    except Exception as e:
+        print(f"[Example TTS] Example {example_index}: ✗ Failed - {e}")
+        return None
+
+
+async def generate_example_tts_with_cloned_voice(
+    voice_id: str,
+    examples: list[str],
+    recording_id: str,
+    question_id: str
+) -> list[str | None]:
+    """
+    Generate TTS for reference examples using user's cloned voice.
+    
+    Args:
+        voice_id: Already cloned ElevenLabs voice ID
+        examples: List of 2 reference example texts
+        recording_id: For file naming
+        question_id: For file naming
+        
+    Returns:
+        List of presigned URLs (one per example)
+    """
+    if not examples:
+        return []
+    
+    print(f"[Example TTS] Generating audio for {len(examples)} examples...")
+    
+    tasks = []
+    for i, example_text in enumerate(examples):
+        tasks.append(
+            _generate_single_example_tts(
+                voice_id=voice_id,
+                example_text=example_text,
+                example_index=i,
+                recording_id=recording_id,
+                question_id=question_id
+            )
+        )
+    
+    # Parallel execution
+    results = await asyncio.gather(*tasks)
+    
+    successful = sum(1 for url in results if url)
+    print(f"[Example TTS] ✓ Generated {successful}/{len(examples)} audio files")
+    
+    return results
+
+
 async def generate_chunk_tts_parallel(
     voice_id: str,
     chunks: list[dict],
@@ -482,7 +588,47 @@ async def generate_chunk_tts_parallel(
     # Execute all in parallel
     results = await asyncio.gather(*tasks)
     
-    # Cleanup voice after all chunks complete
+    successful_count = sum(1 for url in results if url)
+    print(f"[TTS] ✓ Complete! Generated {successful_count}/{len(chunks)} audio files")
+    
+    return results
+
+
+async def generate_all_tts_with_cloned_voice(
+    voice_id: str,
+    chunks: list[dict],
+    chunk_feedbacks: list,
+    examples: list[str],
+    recording_id: str,
+    question_id: str
+) -> tuple[list[str | None], list[str | None]]:
+    """
+    Generate TTS for both chunks and examples, then cleanup voice.
+    
+    Args:
+        voice_id: ElevenLabs voice ID (already cloned)
+        chunks: Chunk structure from chunking
+        chunk_feedbacks: Feedback for each chunk (with corrected_text)
+        examples: List of reference example texts
+        recording_id: Recording ID for file naming
+        question_id: Question ID for file naming
+        
+    Returns:
+        (chunk_audio_urls, example_audio_urls)
+    """
+    print(f"[TTS] Starting TTS generation for chunks and examples...")
+    
+    # Parallel generation
+    chunk_task = generate_chunk_tts_parallel(
+        voice_id, chunks, chunk_feedbacks, recording_id, question_id
+    )
+    example_task = generate_example_tts_with_cloned_voice(
+        voice_id, examples, recording_id, question_id
+    )
+    
+    chunk_urls, example_urls = await asyncio.gather(chunk_task, example_task)
+    
+    # Cleanup voice after all TTS complete
     try:
         elevenlabs = get_elevenlabs_service()
         await elevenlabs.delete_voice(voice_id)
@@ -490,7 +636,4 @@ async def generate_chunk_tts_parallel(
     except Exception as e:
         print(f"[TTS] Cleanup warning: {e}")
     
-    successful_count = sum(1 for url in results if url)
-    print(f"[TTS] ✓ Complete! Generated {successful_count}/{len(chunks)} audio files")
-    
-    return results
+    return chunk_urls, example_urls

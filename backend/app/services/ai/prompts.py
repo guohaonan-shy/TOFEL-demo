@@ -67,8 +67,47 @@ def get_full_audio_analysis_prompt_gemini(question_text: str) -> str:
     "delivery_comment": "表达维度的详细点评（遵循肯定+建议原则）...",
     "language_use_comment": "语言维度的详细点评（遵循肯定+建议原则）...",
     "topic_development_comment": "逻辑维度的详细点评（遵循肯定+建议原则）..."
-  }}
+  }},
+  
+  "additional_examples": [
+    "第一个4分标准的参考示例（英文）...",
+    "第二个4分标准的参考示例（英文）..."
+  ]
 }}
+
+### 参考案例生成要求（非常重要）
+
+除了评分和反馈，你还需要为这道题目生成**2个4分标准的参考案例**。这些案例是**独立于考生录音**的满分示例，用于展示如何达到4分标准。
+
+**重要原则**：
+1. **基于题目，不基于考生表现**：这些示例完全基于题目本身，不要参考或评论考生的录音内容。
+2. **观点多样化**：两个示例应该从不同角度回答题目。例如，如果题目是"学生是否应该休学工作"，一个可以从学生应该休学工作角度，另一个从学生不应该休学工作角度。
+3. **符合4分标准**：每个示例必须展示：
+   - Delivery: 流畅自然的表达（虽然是文本，但要口语化）
+   - Language Use: 准确的语法、丰富的词汇、自然的句式变化
+   - Topic Development: 清晰的观点、充分的细节、连贯的逻辑
+4. **长度控制**：每个示例应该是45秒内可以讲完的长度，大约**110-130词左右**。
+5. **结构完整**：每个示例应包含：
+   - 开头语（明确表明立场）
+   - 观点1 + 具体例子/细节支持
+   - 观点2 + 具体例子/细节支持  
+   - 总结（可选，如果字数允许）
+6. **口语化表达**：贴近美国人日常说话的自然用词，不要过于书面或学术化。使用简洁明了的表达，避免复杂从句堆砌。
+
+**示例格式**（仅供参考结构，不要照搬）：
+题目: "Do you agree or disagree with the following statement? Students should take a gap year before entering university."
+
+示例1(学生应该休学工作): "I strongly believe that students should take a gap year before going to college.
+First of all, it allows them to gain real-world work experience, which is something they usually can’t get in a classroom. For instance, by working at a startup or a small company, students can develop practical skills such as teamwork, communication, and time management.
+More importantly, taking a gap year helps students better understand their own interests and career goals. Many freshmen end up changing their majors simply because they rushed into college without a clear direction.
+Therefore, spending one year exploring different options can actually help students make wiser decisions and save time in the long run."
+
+示例2(学生不应该休学工作): "I don’t think taking a gap year before college is a good idea for most students.
+First of all, many students lack clear goals during a gap year, so instead of gaining useful experience, they may simply waste time. Without a structured plan, it’s easy to lose motivation and fall behind academically.
+In addition, starting college right after high school helps students stay in a focused learning environment. Being surrounded by classmates and professors encourages them to build good study habits and think seriously about their future.
+Therefore, going directly to college can be a more efficient and reliable path for most students.“
+
+请在 `additional_examples` 数组中输出2个这样的英文示例。
 """
 
 

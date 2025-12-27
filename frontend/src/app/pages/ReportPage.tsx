@@ -4,12 +4,101 @@ import {
   AlertCircle, RefreshCcw, 
   Sparkles, ChevronDown, ChevronUp,
   Volume2, BookOpen, Play, Pause,
-  Mic, MessageSquare, Target
+  Mic, MessageSquare, Target, Copy, Award
 } from 'lucide-react';
 import type { AnalysisResponse, ChunkAnalysis, ReportJSONV2 } from '../../services/api';
 import {
   ChunkFeedbackCoach
 } from '../components/feedback';
+
+// Reference Example Card Component
+interface ReferenceExampleCardProps {
+  example: string;
+  index: number;
+  audioUrl?: string | null;
+}
+
+const ReferenceExampleCard: React.FC<ReferenceExampleCardProps> = ({ example, index, audioUrl }) => {
+  const [isCopied, setIsCopied] = React.useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(example);
+    setIsCopied(true);
+    setTimeout(() => setIsCopied(false), 2000);
+  };
+
+  return (
+    <div className="bg-gradient-to-br from-amber-50 via-yellow-50 to-white rounded-2xl border-2 border-amber-200 shadow-lg overflow-hidden">
+      {/* Header */}
+      <div className="bg-gradient-to-r from-amber-500 to-yellow-500 px-5 py-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-white" fill="currentColor" />
+            <h4 className="font-bold text-white">示例 {index}</h4>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-amber-900 bg-white/30 px-2 py-1 rounded-full">
+              4分标准
+            </span>
+            {audioUrl && (
+              <span className="text-xs font-semibold text-purple-900 bg-purple-200/50 px-2 py-1 rounded-full flex items-center gap-1">
+                <Volume2 className="w-3 h-3" />
+                用你的声音
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="p-6">
+        <div className="bg-white rounded-xl p-5 border border-amber-200 mb-4">
+          <p className="text-gray-800 leading-relaxed font-medium text-base">
+            "{example}"
+          </p>
+        </div>
+
+        {/* Audio Player */}
+        {audioUrl ? (
+          <div className="bg-white rounded-lg p-4 border border-amber-300 mb-3">
+            <div className="flex items-center gap-2 mb-2">
+              <Volume2 className="w-4 h-4 text-purple-600" />
+              <h5 className="text-sm font-semibold text-gray-900">
+                听听用你的声音说出的满分示例！
+              </h5>
+            </div>
+            <audio 
+              controls 
+              src={audioUrl}
+              preload="auto"
+              className="w-full"
+              style={{ height: '40px' }}
+            >
+              Your browser does not support the audio element.
+            </audio>
+          </div>
+        ) : (
+          <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 text-center mb-3">
+            <p className="text-sm text-gray-500">音频生成中或不可用</p>
+          </div>
+        )}
+        
+        {/* Copy Button */}
+        <button
+          onClick={handleCopy}
+          className={`w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-medium transition-all ${
+            isCopied
+              ? 'bg-green-600 text-white'
+              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+          }`}
+        >
+          <Copy className="w-4 h-4" />
+          {isCopied ? '已复制!' : '复制文本'}
+        </button>
+      </div>
+    </div>
+  );
+};
 
 // Score dimension card component with progress bar
 interface ScoreDimensionCardProps {
@@ -684,6 +773,32 @@ export const ReportPage: React.FC<ReportPageProps> = ({
         </div>
       )}
       
+      {/* Reference Examples Section */}
+      {report.global_evaluation.additional_examples && 
+       report.global_evaluation.additional_examples.length > 0 && (
+        <div className="mb-8">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="p-2 bg-gradient-to-br from-amber-100 to-yellow-100 rounded-xl">
+              <Award className="w-6 h-6 text-amber-600" />
+            </div>
+            <div>
+              <h3 className="text-xl font-bold text-gray-900">满分参考案例</h3>
+              <p className="text-sm text-gray-500">4-Score Reference Examples</p>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {report.global_evaluation.additional_examples.map((example, index) => (
+              <ReferenceExampleCard 
+                key={index} 
+                example={example} 
+                index={index + 1}
+                audioUrl={report.global_evaluation.example_audio_urls?.[index]}
+              />
+            ))}
+          </div>
+        </div>
+      )}
       
       {/* Practice Again Button */}
       <div className="fixed bottom-6 left-0 right-0 flex justify-center pointer-events-none z-20">

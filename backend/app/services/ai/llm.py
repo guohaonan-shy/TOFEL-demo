@@ -52,6 +52,7 @@ class GlobalEvaluationLLM(BaseModel):
     topic_development: float = Field(..., ge=0, le=4, description="Topic development score (0-4)")
     overall_summary: str = Field(..., description="Brief summary in Chinese")
     detailed_feedback: str = Field(..., description="Detailed analysis from audio")
+    additional_examples: list[str] = Field(..., description="Two 4-score reference examples in English")
 
 
 class GlobalEvaluation(BaseModel):
@@ -64,6 +65,8 @@ class GlobalEvaluation(BaseModel):
     level: str = Field(..., description="Excellent/Good/Fair/Weak based on total_score")
     overall_summary: str = Field(..., description="Brief summary in Chinese")
     detailed_feedback: str = Field(..., description="Detailed analysis from audio")
+    additional_examples: list[str] = Field(default_factory=list, description="Two 4-score reference examples in English")
+    example_audio_urls: list[str | None] = Field(default_factory=list, description="Cloned voice audio URLs for reference examples")
 
 
 class FullTranscript(BaseModel):
@@ -185,9 +188,16 @@ async def analyze_full_audio_gemini(audio_url: str, question_text: str) -> Globa
                                 "topic_development_comment": {"type": "string"}
                             },
                             "required": ["delivery_comment", "language_use_comment", "topic_development_comment"]
+                        },
+                        "additional_examples": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "minItems": 2,
+                            "maxItems": 2,
+                            "description": "Two 4-score reference examples in English"
                         }
                     },
-                    "required": ["scores", "overall_summary", "detailed_feedback"]
+                    "required": ["scores", "overall_summary", "detailed_feedback", "additional_examples"]
                 }
             )
         )
@@ -242,7 +252,8 @@ async def analyze_full_audio_gemini(audio_url: str, question_text: str) -> Globa
             },
             level=level,
             overall_summary=result_json["overall_summary"],
-            detailed_feedback=detailed_feedback_text
+            detailed_feedback=detailed_feedback_text,
+            additional_examples=result_json.get("additional_examples", [])
         )
         
     finally:
@@ -574,7 +585,8 @@ async def parse_global_evaluation_to_json(
         },
         level=level,
         overall_summary=llm_result.overall_summary,
-        detailed_feedback=llm_result.detailed_feedback
+        detailed_feedback=llm_result.detailed_feedback,
+        additional_examples=getattr(llm_result, 'additional_examples', [])
     )
 
 
